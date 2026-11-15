@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var statusItem: NSStatusItem!
     private var shortcut: GlobalShortcut!
     private var companion: CompanionController!
+    private var permissionPanel: NSPanel?
     private let model = CommandModel()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -40,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             self?.panel.orderOut(nil)
         })
         model.onComplete = { [weak self] in self?.panel.orderOut(nil) }
+        model.onAccessibilityNeeded = { [weak self] in self?.showPermissionGuide() }
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         let menuIcon = (icon?.copy() as? NSImage) ?? NSImage(systemSymbolName: "command.square", accessibilityDescription: "Brian")
@@ -95,6 +97,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @objc private func showCompanion() { companion.show() }
+
+    private func showPermissionGuide() {
+        if permissionPanel == nil {
+            let guide = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 388, height: 330),
+                                styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            guide.title = "Allow Brian"
+            guide.isReleasedWhenClosed = false
+            guide.hidesOnDeactivate = false
+            guide.level = .floating
+            guide.contentView = NSHostingView(rootView: PermissionGuideView { [weak self] in
+                guard let self else { return }
+                permissionPanel?.orderOut(nil)
+                model.submit()
+            })
+            guide.center()
+            permissionPanel = guide
+        }
+        permissionPanel?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
 
     @objc private func selectTarget(_ sender: NSMenuItem) {
         guard !model.isRunning else { return }

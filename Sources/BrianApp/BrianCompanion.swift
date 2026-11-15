@@ -84,14 +84,8 @@ struct CompanionView: View {
                 .background(.regularMaterial, in: Capsule())
                 .opacity(hovering || model.isRunning || model.hasError || model.isVerified ? 1 : 0)
             BrianAvatar(mood: mood).frame(width: 122, height: 110)
-            HStack(spacing: 4) {
-                Circle().fill(model.hasError ? .orange : Color.cyan).frame(width: 4, height: 4)
-                Text("Brian").font(.system(size: 10, weight: .semibold, design: .rounded))
-            }
-            .foregroundStyle(.primary).padding(.horizontal, 8).padding(.vertical, 3)
-            .background(.regularMaterial, in: Capsule())
         }
-        .frame(width: 146, height: 158)
+        .frame(width: 146, height: 138)
         .overlay { interaction }
     }
 }
@@ -203,7 +197,7 @@ final class CompanionController {
     private let panel: NSPanel
 
     init(model: CommandModel, open: @escaping () -> Void) {
-        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 146, height: 158),
+        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 146, height: 138),
                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.title = "Brian companion"
         panel.isOpaque = false

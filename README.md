@@ -19,8 +19,17 @@ settles inside the available screen area and saves its position on release.
 
 ## Current scope
 
+- **Apple Mail search:** “Find the latest Draper email” or “Search my emails for
+  invoices” opens Mail's search across **All Mailboxes**, ordered by received date,
+  newest first. Results stay in Mail, where you can inspect and open them. Mail's
+  normal keyword search can match sender, subject, and message content. This is a
+  dedicated local Accessibility workflow, not inference by the research adapter.
+  It requires Mail to be configured and its main search field visible. It changes
+  search and sort controls; it does not compose, send, delete, or summarize email.
+  The initial natural-language grammar supports find/search/show requests with
+  an email keyword and a search term; it is not general email reasoning.
 - **Model:** Qwen3.5-4B, MLX 4-bit conversion, with the `mac-ax-bootstrap-v0` LoRA adapter.
-- **Apps:** Finder and TextEdit. Select the fallback target in the menu bar's **Work in** menu. Opening Brian
+- **Model-controlled apps:** Finder and TextEdit. Select the fallback target in the menu bar's **Work in** menu. Opening Brian
   while either app is frontmost selects that app automatically.
 - **Actions:** accessibility press and text replacement. Input is accessibility
   text; screenshots and voice are not used.
@@ -75,6 +84,10 @@ for local development; distribution signing/notarization is not configured.
 3. If prompted, open the privacy pane using Brian's settings button. Enable
    **Brian** in **Accessibility** (named **Device Control and Data Access** on
    newer macOS versions), then retry. macOS may require restarting Brian.
+
+Brian's permission guide stays visible beside Settings. Drag the app icon into
+the Accessibility list, turn on its switch, then click **I’ve enabled it — retry**.
+The native drag shares the exact running `.app` URL, not a temporary copy.
 
 After rebuilding an ad-hoc-signed app, macOS can retain an enabled switch for
 the old signature while denying the new copy. Remove the stale **Brian** entry,
@@ -140,11 +153,19 @@ both Brian's fresh readback and an independent UI inspection confirmed the
 exact text. The companion displayed its happy **Done!** state. This validates
 one live text action, not general multi-step task reliability.
 
+The subsequent Mail/permission update passed 28 tests. A live search submitted
+through Brian opened Apple Mail's All Mailboxes results, retained the requested
+query, and verified Date + Newest Message on Top using Mail's menu state. The
+newest results were also inspected independently. The app's current access was
+refreshed after packaging. Native drag-to-Settings support is implemented; the
+cross-app drag itself has not been verified by the automation tool.
+
 ## Architecture
 
 ```text
 SwiftUI command panel
   ├─ launcher command → NSWorkspace
+  ├─ email search → Apple Mail Accessibility search + All Mailboxes + date sort
   └─ agent task → AgentLoop
        ├─ mac_status
        ├─ mac_observe → current accessibility snapshot
@@ -157,6 +178,8 @@ SwiftUI command panel
 - `Sources/BrianCore/MCPRuntime.swift`: async stdio MCP client, deadlines, cancellation.
 - `Sources/BrianRuntimeHost`: process-group isolation for model/native shutdown.
 - `Sources/BrianApp`: input, target app, progress, native launcher commands.
+- `Sources/BrianApp/MailSearchExecutor.swift`: bounded Mail search-control workflow.
+- `Sources/BrianApp/PermissionGuideView.swift`: persistent guide with draggable app icon.
 - `Tests/BrianCoreTests`: loop behavior and subprocess protocol tests.
 - `scripts/build-app.sh`: self-contained app packaging.
 

@@ -17,6 +17,7 @@ final class CommandModel: ObservableObject {
     private var task: Task<Void, Never>?
     private let runtime: MCPRuntime
     var onComplete: (() -> Void)?
+    var onAccessibilityNeeded: (() -> Void)?
 
     init() {
         let bundle = ProcessInfo.processInfo.environment["BRIAN_RUNTIME_BUNDLE"].map { URL(fileURLWithPath: $0) }
@@ -37,6 +38,16 @@ final class CommandModel: ObservableObject {
         task = Task { [self] in
             defer { isRunning = false; task = nil }
             do {
+                if let search = try MailSearchRequest.parse(text) {
+                    status = "Searching Apple Mail…"
+                    try await MailSearchExecutor().execute(search)
+                    try Task.checkCancellation()
+                    status = "Showing Mail results for ‘\(search.query)’, newest first."
+                    isVerified = true
+                    instruction = ""
+                    onComplete?()
+                    return
+                }
                 // Keep instant launcher commands; everything else goes through
                 // the bundled model, not the old command parser.
                 do {
@@ -64,6 +75,7 @@ final class CommandModel: ObservableObject {
                     status = error.localizedDescription
                     hasError = true
                     needsAccessibility = (error as? AgentError) == .accessibility
+                    if needsAccessibility { onAccessibilityNeeded?() }
                 }
             }
         }

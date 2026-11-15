@@ -35,9 +35,7 @@ struct CommandView: View {
                     VStack(alignment: .leading, spacing: 12) {
                         Text(model.status).font(.callout).textSelection(.enabled)
                         if model.needsAccessibility {
-                            Button("Open Accessibility Settings") {
-                                NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
-                            }
+                            Button("Set up access") { model.onAccessibilityNeeded?() }
                         }
                     }
                     .padding(16).frame(width: 320, alignment: .leading)
