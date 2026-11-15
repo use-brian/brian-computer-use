@@ -3,8 +3,10 @@ import Foundation
 public struct TaskGoal: Codable, Sendable, Equatable {
     public let objective: String
     public let criteria: [String]
-    public init(objective: String, criteria: [String]) { self.objective = objective; self.criteria = criteria }
+    public let mail_search: MailSearchPlan?
+    public init(objective: String, criteria: [String], mailSearch: MailSearchPlan? = nil) { self.objective = objective; self.criteria = criteria; mail_search = mailSearch }
     public func validate() throws {
+        try mail_search?.validate()
         guard !objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, objective.count <= 12000,
               (1...8).contains(criteria.count), criteria.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.count <= 12000 }) else { throw AgentError.invalidAction }
     }

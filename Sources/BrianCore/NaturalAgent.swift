@@ -15,10 +15,11 @@ public struct DesktopElement: Codable, Sendable, Equatable {
     public let selectable: Bool
     public let selected: Bool
     public let actions: [String]
-    public init(id: String, role: String, label: String, value: String, enabled: Bool, editable: Bool, actions: [String], selectable: Bool = false, selected: Bool = false) {
+    public let contentGroup: String?
+    public init(id: String, role: String, label: String, value: String, enabled: Bool, editable: Bool, actions: [String], selectable: Bool = false, selected: Bool = false, contentGroup: String? = nil) {
         self.id = id; self.role = role; self.label = label; self.value = value
         self.enabled = enabled; self.editable = editable; self.actions = actions
-        self.selectable = selectable; self.selected = selected
+        self.selectable = selectable; self.selected = selected; self.contentGroup = contentGroup
     }
 }
 public struct VisualSnapshot: Codable, Sendable, Equatable {
@@ -108,7 +109,7 @@ public struct PlannerAction: Codable, Sendable, Equatable {
         switch kind {
         case "open_app": return "Opening the requested app…"
         case "open_url", "search_web": return "Opening your browser…"
-        case "search_mail": return "Searching Mail…"
+        case "search_mail": return "Searching Mail for “\(value ?? "")”…"
         case "vision_observe": return "Looking at \(name)…"
         case "vision_click": return "Clicking \(message ?? "the visual target")…"
         case "select": return "Selecting \(label?.isEmpty == false ? label! : "a result in " + name)…"
@@ -181,6 +182,9 @@ public struct NaturalResult: Sendable {
             "current_date": .string(started), "time_zone": .string(zone),
         ]))
         try goal.validate()
+        var mailSearch = MailSearchSession(plan: goal.mail_search)
+        let excerptReply = VerifiedMailReply.required(goal.mail_search)
+        var searchRejections = 0
         try Task.checkCancellation()
         func record(_ observation: DesktopObservation) -> String {
             let id = "o\(observationNumber)"; observationNumber += 1
@@ -191,6 +195,7 @@ public struct NaturalResult: Sendable {
         for step in 0..<maxSteps {
             try Task.checkCancellation()
             let observation = try await tools.observe(app: activeApp)
+            mailSearch.observe(observation)
             let observationID = record(observation)
             let context: JSONValue = .object([
                 "installed_applications": try json(tools.applications),
@@ -198,6 +203,8 @@ public struct NaturalResult: Sendable {
                 "conversation": try json(Array(conversation.suffix(6))),
                 "history": .array(Array(history.suffix(12))),
                 "goal": try json(goal), "evidence": try json(evidence),
+                "mail_search": try json(mailSearch),
+                "reply_mode": .string(excerptReply ? "excerpt" : "summary"),
                 "observation_id": .string(observationID),
                 "completion_feedback": .string(feedback),
                 "completion_rejections": .number(completionRejections),
@@ -207,7 +214,27 @@ public struct NaturalResult: Sendable {
                 "time_zone": .string(TimeZone.current.identifier),
             ])
             onEvent(step == 0 ? "Understanding your request…" : observation.vision != nil ? "Inspecting \(observation.name) visually…" : "Reading controls in \(observation.name)…")
-            var action = try await planner.plan(task: task, context: context)
+            var action: PlannerAction
+            if mailSearch.needsEmptyConfirmation {
+                action = .init(kind: "wait")
+            } else if let next = mailSearch.nextQuery, mailSearch.attempts.isEmpty || mailSearch.lastWasEmpty {
+                action = .init(kind: "search_mail", value: next)
+            } else {
+                action = try await planner.plan(task: task, context: context)
+            }
+            if action.kind == "search_mail", let query = action.value {
+                guard let corrected = mailSearch.correctedQuery(query) else {
+                    feedback = "That query has already been tried, or the search budget is exhausted. Inspect actual results or explain what remains unverified. Do not retry it or switch to vision for a search-strategy problem."
+                    searchRejections += 1
+                    if searchRejections >= 3 { return NaturalResult(message: "I couldn’t verify the requested email information after trying different searches. Please add a sender, airline, or another identifying detail.", needsInput: true, steps: step) }
+                    continue
+                }
+                action = .init(kind: "search_mail", value: corrected)
+                searchRejections = 0
+            }
+            if action.kind == "done", completionRejections > 0, let next = mailSearch.nextQuery {
+                action = .init(kind: "search_mail", value: next)
+            }
             try Task.checkCancellation()
             try action.validate(observation: observation, apps: tools.applications)
             if action.kind == "ask" {
@@ -224,7 +251,8 @@ public struct NaturalResult: Sendable {
                 let fresh = try await tools.observe(app: activeApp)
                 let currentID = record(fresh)
                 let assessment = try await planner.assess(task: task, context: .object([
-                    "goal": try json(goal), "proposal": .string(action.message!),
+                    "goal": try json(goal), "proposal": .string(action.message!), "mail_search": try json(mailSearch),
+                    "reply_mode": .string(excerptReply ? "excerpt" : "summary"),
                     "evidence": try json(evidence), "current_observation_id": .string(currentID),
                     "observation": try json(fresh), "history": .array(Array(history.suffix(12))),
                     "conversation": try json(Array(conversation.suffix(6))),
@@ -232,10 +260,14 @@ public struct NaturalResult: Sendable {
                     "request_started": .string(started), "time_zone": .string(zone),
                 ]))
                 try Task.checkCancellation()
-                if assessment.accepts(goal: goal, evidence: evidence, currentID: currentID) {
-                    return NaturalResult(message: action.message!, needsInput: false, steps: step)
+                let accepted = assessment.accepts(goal: goal, evidence: evidence, currentID: currentID)
+                let excerpt = goal.mail_search.flatMap { VerifiedMailReply.render(plan: $0, assessment: assessment, evidence: evidence) }
+                if accepted, !excerptReply || excerpt != nil {
+                    return NaturalResult(message: excerptReply ? excerpt! : action.message!, needsInput: false, steps: step)
                 }
-                feedback = assessment.complete
+                feedback = accepted && excerptReply
+                    ? "Read and cite an actual message content element containing the requested event date and year. The final answer must quote verified message content, not a generated itinerary summary."
+                    : assessment.complete
                     ? "Completion rejected: cite real observations for every success criterion. Tool acknowledgments and invented evidence cannot prove completion."
                     : String(assessment.reason.prefix(2000))
                 completionRejections += 1
@@ -253,7 +285,15 @@ public struct NaturalResult: Sendable {
             let repeats = attempts.filter { $0.0 == intent && $0.1 == state }.count
             let inspectionOnly = ["observe", "wait"].contains(action.kind) || (action.kind == "open_app" && action.app == observation.app)
             inspections = inspectionOnly ? inspections + 1 : 0
-            if repeats >= 2 || inspections > 2 {
+            if (repeats >= 2 || inspections > 2), !mailSearch.attempts.isEmpty,
+               ["search_mail", "read", "observe", "wait", "open_app"].contains(action.kind) {
+                guard let next = mailSearch.nextQuery else {
+                    return NaturalResult(message: "The email search isn’t making progress. I haven’t verified a matching message. Please add a sender or another identifying detail.", needsInput: true, steps: step)
+                }
+                action = .init(kind: "search_mail", value: next)
+                feedback = "Previous searches/inspections made no progress. Trying a different query; verify the date and facts in actual message content."
+                inspections = 0
+            } else if repeats >= 2 || inspections > 2 {
                 guard observation.vision == nil, !history.contains(where: { $0["action"]["kind"].string == "vision_observe" }) else {
                     return NaturalResult(message: "Neither Accessibility nor vision is making progress. Please review the app.", needsInput: true, steps: step)
                 }
@@ -279,6 +319,7 @@ public struct NaturalResult: Sendable {
                 action = fallback
             }
             try Task.checkCancellation()
+            if action.kind == "search_mail", let query = action.value { mailSearch.searched(query) }
             activeApp = result.app ?? activeApp
             history.append(.object(["action": try json(action), "result": .string(String(result.message.prefix(1500)))]))
         }

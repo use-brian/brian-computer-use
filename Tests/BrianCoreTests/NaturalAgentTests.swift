@@ -7,9 +7,10 @@ private actor ScriptedPlanner: LanguagePlanner {
     var contexts: [JSONValue] = []
     var reviews: [JSONValue] = []
     var assessments: [CompletionAssessment]
-    init(_ actions: [PlannerAction], assessments: [CompletionAssessment] = []) { self.actions = actions; self.assessments = assessments }
+    let mailPlan: MailSearchPlan?
+    init(_ actions: [PlannerAction], assessments: [CompletionAssessment] = [], mailPlan: MailSearchPlan? = nil) { self.actions = actions; self.assessments = assessments; self.mailPlan = mailPlan }
     func goal(task: String, context: JSONValue) async throws -> TaskGoal {
-        .init(objective: task, criteria: ["Requested outcome is visible"])
+        .init(objective: task, criteria: ["Requested outcome is visible"], mailSearch: mailPlan)
     }
     func assess(task: String, context: JSONValue) async throws -> CompletionAssessment {
         reviews.append(context)
@@ -37,8 +38,10 @@ private actor ScriptedPlanner: LanguagePlanner {
     var recoverable = false
     var stableObservation = false
     var pendingVision: VisualSnapshot?
+    var customObservation: DesktopObservation?
     func observe(app: String?) async throws -> DesktopObservation {
         observed += 1
+        if let customObservation { return customObservation }
         let snapshot = pendingVision; pendingVision = nil
         return DesktopObservation(app: "test.app", name: "Test", window: "Window", accessibility: true, truncated: false,
             elements: [DesktopElement(id: "e0", role: "AXButton", label: "Button", value: stableObservation ? "unchanged" : String(executed.count), enabled: true, editable: false, actions: ["AXPress"])], vision: snapshot)
@@ -54,6 +57,39 @@ private actor ScriptedPlanner: LanguagePlanner {
 }
 
 @MainActor final class NaturalAgentTests: XCTestCase {
+    func testDatedMailReplyUsesObservedExcerptInsteadOfInventedSummary() async throws {
+        let text = "ExampleAir QX201 · Departure 16 Nov 2026 · TPE 20:15"
+        let plan = MailSearchPlan(topics: ["flight"], date: "2026-11-16", dateScope: "event", dateVariants: ["16 Nov"], queries: ["flight Nov 16"])
+        let planner = ScriptedPlanner([.init(kind: "done", message: "Invented return time 23:55 and cabin class")], mailPlan: plan)
+        let desktop = FakeDesktop()
+        desktop.customObservation = .init(app: "com.apple.mail", name: "Mail", window: "Confirmation", accessibility: true, truncated: false,
+            elements: [.init(id: "e0", role: "AXCell", label: "Itinerary", value: text, enabled: true, editable: false, actions: [])])
+        let result = try await NaturalAgent(planner: planner, tools: desktop).run(task: "Find my flight on 16 Nov", app: nil, conversation: [], approve: { _ in true }, onEvent: { _ in })
+        XCTAssertFalse(result.needsInput)
+        XCTAssertTrue(result.message.contains(text))
+        XCTAssertFalse(result.message.contains("23:55"))
+        let reviews = await planner.capturedReviews()
+        XCTAssertEqual(reviews.first?["reply_mode"].string, "excerpt")
+    }
+    func testRepeatedMailQueryIsNotExecutedAgainOrSentToVision() async throws {
+        let planner = ScriptedPlanner(Array(repeating: .init(kind: "search_mail", value: "  Flight NOV 16  "), count: 4))
+        let desktop = FakeDesktop(); desktop.stableObservation = true
+        let result = try await NaturalAgent(planner: planner, tools: desktop).run(task: "Find tomorrow's flight email", app: nil, conversation: [], approve: { _ in true }, onEvent: { _ in })
+        XCTAssertTrue(result.needsInput)
+        XCTAssertEqual(desktop.executed.map(\.kind), ["search_mail"])
+        let contexts = await planner.captured()
+        XCTAssertTrue(contexts[2]["completion_feedback"].string!.contains("already been tried"))
+    }
+    func testRepeatedMailQueryAdvancesToUntriedDateCombination() async throws {
+        let plan = MailSearchPlan(topics: ["flight"], date: "2026-11-16", dateScope: "event", queries: ["flight Nov 16", "flight November 16", "itinerary 16 Nov"])
+        let planner = ScriptedPlanner([.init(kind: "search_mail", value: "flight Nov 16"), .init(kind: "search_mail", value: "flight November 16"), .init(kind: "ask", message: "Need a sender")], mailPlan: plan)
+        let desktop = FakeDesktop()
+        _ = try await NaturalAgent(planner: planner, tools: desktop).run(task: "Find tomorrow's flight", app: nil, conversation: [], approve: { _ in true }, onEvent: { _ in })
+        XCTAssertEqual(desktop.executed.compactMap(\.value), plan.queries)
+        XCTAssertFalse(desktop.executed.contains { $0.kind == "vision_observe" })
+        let contexts = await planner.captured()
+        XCTAssertEqual(contexts.last?["mail_search"]["attempts"].array.count, 3)
+    }
     func testPlansAgainstFreshObservationsAndToolResults() async throws {
         let planner = ScriptedPlanner([.init(kind: "press", target: "e0"), .init(kind: "done", message: "Visible result")])
         let desktop = FakeDesktop()

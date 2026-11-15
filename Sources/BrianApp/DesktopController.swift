@@ -78,11 +78,13 @@ final class DesktopController: DesktopTools {
         var truncated = false
         var characters = 0
         var nodes = 0
-        func walk(_ node: AXUIElement, depth: Int, menuPath: String = "") {
+        func walk(_ node: AXUIElement, depth: Int, menuPath: String = "", document: Bool = false, contentGroup: String? = nil) {
             guard depth <= 18, rows.count < 160, characters < 26000, nodes < 700 else { truncated = true; return }
             guard visited.insert(node).inserted else { return }
             nodes += 1
             let role = string(node, kAXRoleAttribute)
+            let inDocument = document || ["AXWebArea", kAXTextAreaRole].contains(role)
+            var descendantGroup = contentGroup
             let subrole = string(node, kAXSubroleAttribute)
             if subrole == "AXSecureTextField" { return }
             let title = displayLabel(node)
@@ -101,16 +103,21 @@ final class DesktopController: DesktopTools {
             AXUIElementIsAttributeSettable(node, kAXSelectedAttribute as CFString, &selectable)
             if !label.isEmpty || !value.isEmpty || !actions.isEmpty || settable.boolValue || selectable.boolValue || [kAXScrollAreaRole, "AXWebArea"].contains(role) {
                 let id = "e\(rows.count)"
+                if inDocument, role == kAXCellRole, descendantGroup == nil { descendantGroup = id }
                 let row = DesktopElement(id: id, role: role, label: label, value: value,
                     enabled: attribute(node, kAXEnabledAttribute) as? Bool ?? true,
-                    editable: settable.boolValue, actions: actions, selectable: selectable.boolValue,
-                    selected: attribute(node, kAXSelectedAttribute) as? Bool ?? false)
+                    editable: settable.boolValue, actions: actions, selectable: selectable.boolValue && !inDocument,
+                    selected: !inDocument && (attribute(node, kAXSelectedAttribute) as? Bool ?? false), contentGroup: descendantGroup)
                 rows.append(row); references[id] = node
                 characters += label.count + value.count + 80
             }
+            // Rows already carry sender/title/date summaries. Do not let long
+            // preview text from early rows crowd all other candidates out.
+            let explicitlyReading = inspection.map { CFEqual($0.node, node) } ?? false
+            if role == kAXRowRole, selectable.boolValue, !inDocument, !label.isEmpty, !explicitlyReading { return }
             let path = role == kAXMenuBarItemRole ? rawLabel + " > " : menuPath
             for child in (attribute(node, kAXChildrenAttribute) as? [AXUIElement] ?? []).prefix(160) {
-                walk(child, depth: depth + 1, menuPath: path)
+                walk(child, depth: depth + 1, menuPath: path, document: inDocument, contentGroup: descendantGroup)
             }
         }
         let windows = attribute(root, kAXWindowsAttribute) as? [AXUIElement] ?? []
@@ -120,7 +127,7 @@ final class DesktopController: DesktopTools {
             ?? windows.first { attribute($0, kAXFocusedAttribute) as? Bool == true } ?? windows.first
         if let window {
             windowReference = window
-            if let inspection, inspection.pid == running.processIdentifier { walk(inspection.node, depth: 0) }
+            if let inspection, inspection.pid == running.processIdentifier { walk(inspection.node, depth: 0, document: isInsideDocument(inspection.node)) }
             // Read document/message content before large sidebars and result lists
             // consume the observation budget. This is role-based, not Mail-specific.
             var contentNodes = 0
@@ -317,7 +324,7 @@ final class DesktopController: DesktopTools {
         guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { throw failure("You switched apps before the action. Stopped.") }
         switch action.kind {
         case "read":
-            inspectionRoot = (pid, node)
+            inspectionRoot = (pid, documentReadRoot(node))
             return .init(app: observation.app, message: "Inspecting the selected content region next. Read its observed text before drawing conclusions.")
         case "select":
             var selectable = DarwinBoolean(false)
@@ -336,18 +343,40 @@ final class DesktopController: DesktopTools {
                 if writable.boolValue { selectionOwner = candidate; break }
                 parent = element(candidate, kAXParentAttribute)
             }
-            let result: AXError
+            let expectedMailRow = observation.app == "com.apple.mail" ? mailRowIdentity(node) : nil
+            if let identity = expectedMailRow {
+                guard clickMailRow(identity, root: root, pid: pid) else {
+                    throw DesktopRecoveryError.accessibilityUnavailable("The intended message row has no safely clickable visible Accessibility frame.")
+                }
+                try await Task.sleep(for: .milliseconds(700))
+                return .init(app: observation.app, message: "Clicked the requested message using its verified Accessibility identity and bounds. Read the fresh message content to verify the requested facts; input dispatch alone does not establish completion.")
+            }
             if let selectionOwner, prior.role == kAXRowRole {
-                result = AXUIElementSetAttributeValue(selectionOwner, kAXSelectedRowsAttribute as CFString, [node] as CFArray)
+                _ = AXUIElementSetAttributeValue(selectionOwner, kAXSelectedRowsAttribute as CFString, [node] as CFArray)
             } else {
-                result = AXUIElementSetAttributeValue(node, kAXSelectedAttribute as CFString, kCFBooleanTrue)
+                _ = AXUIElementSetAttributeValue(node, kAXSelectedAttribute as CFString, kCFBooleanTrue)
             }
-            guard result == .success else { throw failure("The item could not be selected. Review the app before retrying.") }
-            try await Task.sleep(for: .milliseconds(500))
-            let selectedRows = selectionOwner.flatMap { attribute($0, kAXSelectedRowsAttribute) as? [AXUIElement] } ?? []
-            guard attribute(node, kAXSelectedAttribute) as? Bool == true || selectedRows.contains(where: { CFEqual($0, node) }) else {
-                throw failure("Selection did not match the requested item. Review the app.")
+            func selected() -> Bool {
+                let selectedRows = selectionOwner.flatMap { attribute($0, kAXSelectedRowsAttribute) as? [AXUIElement] } ?? []
+                return attribute(node, kAXSelectedAttribute) as? Bool == true || selectedRows.contains(where: { CFEqual($0, node) })
             }
+            var selectionVerified = false
+            for attempt in 0..<2 {
+                if attempt == 1 {
+                    // The owning table may accept AXSelectedRows without applying it.
+                    _ = AXUIElementSetAttributeValue(node, kAXSelectedAttribute as CFString, kCFBooleanTrue)
+                }
+                for _ in 0..<25 {
+                    try await Task.sleep(for: .milliseconds(200))
+                    if selected() { selectionVerified = true; break }
+                }
+                if selectionVerified { break }
+            }
+            guard selectionVerified else {
+                let detail = expectedMailRow?["Mail.messageList.cell.view.subjectLabel"] ?? prior.label
+                throw failure("I couldn’t confirm opening ‘\(detail)’. \(observation.name)’s selection controls did not apply the requested change.")
+            }
+            try await Task.sleep(for: .milliseconds(350))
         case "press":
             var names: CFArray?
             AXUIElementCopyActionNames(node, &names)
@@ -393,9 +422,77 @@ final class DesktopController: DesktopTools {
         return .init(app: observation.app, message: "Applied \(action.kind) to \(prior.label.isEmpty ? prior.role : prior.label); checking the resulting UI next.")
     }
 
-    private func valueLimit(_ role: String) -> Int {
-        [kAXTextAreaRole, kAXStaticTextRole, "AXWebArea"].contains(role) ? 4000 : 500
+    private func documentReadRoot(_ node: AXUIElement) -> AXUIElement {
+        var current: AXUIElement? = node
+        var cell: AXUIElement?
+        for _ in 0..<24 {
+            guard let item = current else { break }
+            let role = string(item, kAXRoleAttribute)
+            if role == "AXWebArea" { return cell ?? node }
+            if role == kAXCellRole { cell = item }
+            current = element(item, kAXParentAttribute)
+        }
+        return node
     }
+
+    private func isInsideDocument(_ node: AXUIElement) -> Bool {
+        var current: AXUIElement? = node
+        for _ in 0..<24 {
+            guard let item = current else { break }
+            if ["AXWebArea", kAXTextAreaRole].contains(string(item, kAXRoleAttribute)) { return true }
+            current = element(item, kAXParentAttribute)
+        }
+        return false
+    }
+
+    private func valueLimit(_ role: String) -> Int {
+        [kAXTextAreaRole, kAXStaticTextRole, kAXCellRole, "AXWebArea"].contains(role) ? 4000 : 500
+    }
+    // Mail may replace AX row objects as selection/read status changes. Compare
+    // stable message metadata from a fresh tree, never the mutable preview text.
+    private func mailRowIdentity(_ node: AXUIElement) -> [String: String]? {
+        let keys: Set<String> = ["Mail.messageList.cell.view.addressLabel", "Mail.messageList.cell.view.subjectLabel", "Mail.messageList.cell.view.dateLabel", "mailbox"]
+        var fields: [String: String] = [:]
+        var queue: [(AXUIElement, Int)] = [(node, 0)]
+        var index = 0
+        while index < queue.count, index < 45 {
+            let (item, depth) = queue[index]; index += 1
+            let key = string(item, kAXIdentifierAttribute)
+            if keys.contains(key) {
+                let value = string(item, kAXValueAttribute)
+                if !value.isEmpty { fields[key] = value }
+            }
+            if depth < 4 { queue += (attribute(item, kAXChildrenAttribute) as? [AXUIElement] ?? []).prefix(16).map { ($0, depth + 1) } }
+        }
+        return fields.count == keys.count ? fields : nil
+    }
+    private func freshMailRows(_ root: AXUIElement) -> [AXUIElement] {
+        guard let window = element(root, kAXFocusedWindowAttribute) ?? element(root, kAXMainWindowAttribute) else { return [] }
+        var queue = [window]
+        var index = 0
+        while index < queue.count, index < 120 {
+            let node = queue[index]; index += 1
+            if string(node, kAXIdentifierAttribute) == "Mail.messageList" {
+                let rows = attribute(node, kAXRowsAttribute) as? [AXUIElement] ?? []
+                return rows.isEmpty ? attribute(node, kAXChildrenAttribute) as? [AXUIElement] ?? [] : rows
+            }
+            if [kAXOutlineRole, "AXWebArea", kAXRowRole].contains(string(node, kAXRoleAttribute)) { continue }
+            queue += (attribute(node, kAXChildrenAttribute) as? [AXUIElement] ?? []).prefix(80)
+        }
+        return []
+    }
+
+    private func clickMailRow(_ identity: [String: String], root: AXUIElement, pid: pid_t) -> Bool {
+        guard let window = element(root, kAXFocusedWindowAttribute) ?? element(root, kAXMainWindowAttribute) else { return false }
+        for row in freshMailRows(root) where mailRowIdentity(row) == identity {
+            if AXWindowClick.click(row, root: root, window: window, pid: pid, matches: { string($0, kAXRoleAttribute) == kAXRowRole && mailRowIdentity($0) == identity }) {
+                overlay.show(rect: frame(row), label: "Opening message", cursor: true)
+                return true
+            }
+        }
+        return false
+    }
+
     private func displayLabel(_ node: AXUIElement) -> String {
         let title = string(node, kAXTitleAttribute)
         let description = string(node, kAXDescriptionAttribute)

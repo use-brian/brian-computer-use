@@ -23,5 +23,5 @@ runtime="$PWD/dist/planner-runtime/mac-control"
 # Keep model, adapter and native helper provenance/layout from the research bundle.
 cp -cR "$research_root/dist/mac-control/resources" "$runtime/" 2>/dev/null || \
   ditto "$research_root/dist/mac-control/resources" "$runtime/resources"
-printf '{"planner_version":3,"model":"Qwen3.5-4B base instruction weights","legacy_adapter":"mac-ax-bootstrap-v0"}\n' > "$runtime/resources/planner-version.json"
+printf '{"planner_version":4,"model":"Qwen3.5-4B base instruction weights","legacy_adapter":"mac-ax-bootstrap-v0"}\n' > "$runtime/resources/planner-version.json"
 printf 'Built planner runtime: %s\n' "$runtime"

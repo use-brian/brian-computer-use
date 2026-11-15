@@ -49,13 +49,22 @@ struct MailSearchExecutor {
         try await Task.sleep(for: .milliseconds(60))
         try key(51, app: app)
         try await Task.sleep(for: .milliseconds(100))
+        // Submit short Unicode runs so Mail's live suggestions cannot interrupt
+        // between every letter. Keep complete characters (including surrogate pairs).
+        var chunks: [String] = []
+        var chunk = ""
         for character in request.query {
+            if !chunk.isEmpty, chunk.utf16.count + String(character).utf16.count > 16 { chunks.append(chunk); chunk = "" }
+            chunk.append(character)
+        }
+        if !chunk.isEmpty { chunks.append(chunk) }
+        for chunk in chunks {
             try Task.checkCancellation()
             guard let focus = attribute(root, kAXFocusedUIElementAttribute), CFEqual(focus, field),
                   NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else {
                 throw failure("Mail’s search focus changed. Stopped before continuing.")
             }
-            let units = Array(String(character).utf16)
+            let units = Array(chunk.utf16)
             guard let source = CGEventSource(stateID: .privateState),
                   let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
                   let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) else { throw failure("Search text input is unavailable.") }
@@ -80,10 +89,18 @@ struct MailSearchExecutor {
             })
         }
         onTarget?(allMailboxes, "All Mailboxes")
-        try set(allMailboxes, kAXSelectedAttribute, kCFBooleanTrue)
-        try await Task.sleep(for: .milliseconds(300))
-        guard attribute(allMailboxes, kAXSelectedAttribute) as? Bool == true else {
-            throw failure("Select All Mailboxes in Mail, then retry the search.")
+        guard let outline = find(window, matching: { string($0, kAXIdentifierAttribute) == "MailboxesOutlineView" }),
+              let freshScope = find(outline, matching: { string($0, kAXRoleAttribute) == kAXRowRole && named($0, "All Mailboxes") }),
+              AXWindowClick.click(freshScope, root: root, window: window, pid: app.processIdentifier,
+                  matches: { string($0, kAXRoleAttribute) == kAXRowRole && named($0, "All Mailboxes") }) else {
+            throw failure("Mail’s All Mailboxes control moved or is not visible. Please leave the search window in front.")
+        }
+        _ = try await waitFor {
+            guard let outline = find(window, matching: { string($0, kAXIdentifierAttribute) == "MailboxesOutlineView" }),
+                  let current = find(outline, matching: { string($0, kAXRoleAttribute) == kAXRowRole && named($0, "All Mailboxes") }) else { return nil }
+            let selected = (attribute(outline, kAXSelectedRowsAttribute) as? [AXUIElement] ?? []) + (attribute(outline, kAXSelectedChildrenAttribute) as? [AXUIElement] ?? [])
+            let scope = string(window, kAXTitleAttribute) + " " + string(window, kAXDescriptionAttribute)
+            return attribute(current, kAXSelectedAttribute) as? Bool == true || selected.contains(where: { named($0, "All Mailboxes") }) || scope.contains("All Mailboxes") ? current : nil
         }
         // Searching must not open menu tracking or alter the user's sort order.
         // The previous automatic sort verification stranded View > Sort By.

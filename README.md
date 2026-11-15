@@ -190,7 +190,7 @@ Input + in-memory conversation
 
 ## Validation on 2026-11-15
 
-52 Swift tests and 15 Python validation tests pass. Real local-model checks mapped
+62 Swift tests and 23 Python validation tests pass. Real local-model checks mapped
 varied email/app/document requests to tools, including a contextual follow-up
 (“What about invoices from them?” → a Draper invoice search). A live run of the
 previously rejected “search cathay emails for me” changed the visible Mail query
@@ -268,3 +268,80 @@ uses the owning table's selected-rows API where available. In the live Mail chec
 Brian used the real Mail app, but the run still stopped when vision could not
 match an unambiguous visible window. Real flight retrieval is **not yet verified**;
 passing the synthetic checks does not establish that workflow's reliability.
+
+
+### Date-aware email retrieval (0.6.0)
+
+The local model extracts search topics separately from the requested date. The
+harness resolves `tomorrow`, `tmr`, and `tmrw` using the request's local calendar,
+then generates bounded alternatives: `flight Nov 16`, `flight November 16`,
+`flight 16 Nov`, ISO/numeric dates, alternate topics, and broader queries. An
+explicit exact-phrase search keeps its literal text. Event dates are not treated
+as the date the email arrived; a search hit is only a candidate, and the message
+content must establish the requested date and details.
+
+Each run retains every attempted query and its observed outcome. Duplicate
+queries cannot execute again, and all planned/model-generated searches share a
+14-query limit. A confirmed empty result advances automatically; an initial
+empty observation is checked again after waiting. Repeated inspections advance
+the search strategy instead of treating missing results as an Accessibility
+failure requiring vision. The model can still propose new queries and inspect
+promising messages. A focused candidate-selection pass presents the 4B model with
+message labels and asks which relevant email to open, without the full desktop
+control inventory. Large result-row previews are summarized so they do not
+crowd out other result rows and selected message content.
+
+`scripts/smoke-mail-search-plan.py /path/to/model` checks the actual local 4B
+model's interpretation of the original flight request, `tmr`, a delivery request,
+and a non-email request. Unit tests cover date boundaries, exact phrases, query
+memory, budget enforcement, stale observations, and alternate-query execution.
+These checks establish search planning behavior, not general email-retrieval
+accuracy or proof that a real booking exists.
+
+
+Mail message rows are opened with fresh sender/subject/mailbox/date metadata,
+Accessibility bounds, an AX hit test, and a window-targeted click. The All
+Mailboxes scope uses the same semantic click path because Mail's row setters
+proved unreliable during live checks. The agent then reads fresh content;
+a click or selection flag alone never proves the task completed. Short Unicode
+input batches reduce interruption by live search suggestions while retaining
+foreground/focus checks.
+
+HTML table rows inside email bodies are exposed as readable content, not
+selectable message rows. Their cell text gets the document-text budget rather
+than a short control-value budget. This fixes the observed failure where the
+model opened a real confirmation, then tried to select its itinerary table and
+stopped with “Selection did not match the requested item.”
+
+
+Date-sensitive email replies must use explicit observed event dates rather than
+“next day”/“following day” chronology. For generated-summary mode, the harness rejects that reply format
+before completion. Flight-search answers prioritize supported departure details
+and omit unrequested arrival-day comparisons. A proposed second 4B factual pass
+was not retained: it both missed incorrect claims and rejected correct details.
+Earlier verifier variants also rejected correct cross-date itineraries. The final
+smoke checks pass the sampled explicit-date case, but that is not evidence of
+general itinerary reasoning reliability. A stronger
+planner/reviewer may still be needed for reliable complex itinerary reasoning;
+these harness improvements do not establish general intelligence.
+
+
+For dated event lookups in Mail, the final reply is now **extractive**: the model
+chooses relevant evidence, and native code displays only verbatim cited message
+content containing the requested date and year. Model-written itinerary prose
+is not displayed in this mode. A live run had found the right booking but added
+unsupported return-time and cabin-class claims; this boundary prevents such
+invented fields from reaching the user. The reviewer still checks whether the
+content answers the request, and an absent qualifying excerpt keeps the task
+incomplete. This trades polished summaries for traceable local results.
+
+Citations to individual dates expand to their observed document-cell context,
+so an itinerary reply includes surrounding flight details rather than a lone
+date. Expansion uses native observation groups, not model-generated text.
+
+Final 0.6.0 validation: 62 Swift tests and 23 Python tests passed, as did the
+local-model search-planning and completion-review smoke checks. A live Apple
+Mail run for an explicit November 16, 2026 request searched, opened a real
+booking, and returned observed itinerary text containing the date, route, and
+departure time. This verifies that sampled workflow, not exhaustive retrieval
+of every matching message or every possible itinerary layout.
