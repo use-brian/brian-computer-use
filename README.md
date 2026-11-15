@@ -35,8 +35,8 @@ in the menu bar clears it. Stop/Escape cancels the current run.
 Open installed apps, open HTTP(S) addresses, search the web, search Apple Mail,
 press accessible controls, replace text, use a small set of keyboard shortcuts,
 and scroll supported areas. When Accessibility is blocked, capture the current
-window, locate a visible target, then click or scroll using vision. Mail search uses All Mailboxes and verifies
-received-date/newest-first ordering; Mail's normal search can match sender,
+window, locate a visible target, then click or scroll using vision. Mail search uses All Mailboxes and preserves
+the existing sort order; Mail's normal search can match sender,
 subject, and message content. Results stay in Mail.
 
 Generic app control is no longer limited to Finder and TextEdit. It relies on
@@ -172,7 +172,7 @@ Input + in-memory conversation
 - `PlannerRuntime`: inference prompt, schema validation, frozen-runtime entry.
 - `Sources/BrianCore/NaturalAgent.swift`: bounded planning loop and tool contracts.
 - `Sources/BrianApp/DesktopController.swift`: observed app controls and execution checks.
-- `Sources/BrianApp/MailSearchExecutor.swift`: verified Mail search/sort workflow.
+- `Sources/BrianApp/MailSearchExecutor.swift`: verified Mail search workflow.
 - `Sources/BrianCore/MCPRuntime.swift`: local stdio transport, timeout/cancellation.
 - `Sources/BrianApp/PermissionGuideView.swift`: native draggable app setup guide.
 
@@ -203,3 +203,9 @@ and keeping the pet clear of the command bar and small action targets. Live
 vision-click delivery remains unverified: the latest native end-to-end runs
 stopped on focus changes. Synthetic grounding checks are not a substitute for
 successful native click delivery.
+
+Mail searches preserve the current sort order and do not open View → Sort By.
+Automatic sort verification previously left nested native menus stranded after
+the search; removing that unrelated step avoids trapping Mail in menu tracking.
+After a normal Mail restart, a live repeat of the reported search completed;
+Mail’s File menu then opened and dismissed normally. All 45 Swift tests passed.

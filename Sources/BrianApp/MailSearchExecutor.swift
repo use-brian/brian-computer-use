@@ -2,7 +2,7 @@ import AppKit
 import ApplicationServices
 import BrianCore
 
-/// A narrow, read-only Mail workflow. It changes search/sort controls, never
+/// A narrow, read-only Mail workflow. It changes search controls, never
 /// composes, sends, deletes, or interprets email contents as instructions.
 @MainActor
 struct MailSearchExecutor {
@@ -85,21 +85,14 @@ struct MailSearchExecutor {
         guard attribute(allMailboxes, kAXSelectedAttribute) as? Bool == true else {
             throw failure("Select All Mailboxes in Mail, then retry the search.")
         }
-        try await selectSort("Mail.menuBar.viewMenu.sortBy.date", root: root, app: app)
-        try await selectSort("Mail.menuBar.viewMenu.sortBy.descending", root: root, app: app)
-        let menu = try await sortMenu(root: root)
-        let date = find(menu, matching: { string($0, kAXIdentifierAttribute) == "Mail.menuBar.viewMenu.sortBy.date" })
-        let descending = find(menu, matching: { string($0, kAXIdentifierAttribute) == "Mail.menuBar.viewMenu.sortBy.descending" })
-        let sorted = date.map { !string($0, kAXMenuItemMarkCharAttribute).isEmpty } == true &&
-            descending.map { !string($0, kAXMenuItemMarkCharAttribute).isEmpty } == true
-        try key(53, app: app)
-        try key(53, app: app)
+        // Searching must not open menu tracking or alter the user's sort order.
+        // The previous automatic sort verification stranded View > Sort By.
         let currentWindows = attribute(root, kAXWindowsAttribute) as? [AXUIElement] ?? []
         let main = attribute(root, kAXFocusedWindowAttribute).flatMap { focused in currentWindows.first { CFEqual($0, focused) } }
             ?? currentWindows.first { attribute($0, kAXMainAttribute) as? Bool == true }
-        guard sorted, main.map({ CFEqual($0, window) }) == true,
+        guard main.map({ CFEqual($0, window) }) == true,
               string(field, kAXValueAttribute) == request.query else {
-            throw failure("Mail opened the search, but I couldn’t verify newest-first ordering. Review its results.")
+            throw failure("Mail opened the search, but its window or query changed before verification. Review its results.")
         }
     }
 
@@ -109,32 +102,6 @@ struct MailSearchExecutor {
             [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute].contains { string(item, $0) == name }
         }
     }
-    private func sortMenu(root: AXUIElement) async throws -> AXUIElement {
-        guard let value = attribute(root, kAXMenuBarAttribute) else { throw failure("Mail’s menu bar is unavailable.") }
-        let menuBar = value as! AXUIElement
-        guard let view = find(menuBar, matching: { string($0, kAXIdentifierAttribute) == "Mail.menuBar.viewMenu" }) else {
-            throw failure("Mail’s View menu is unavailable.")
-        }
-        try press(view)
-        let sort = try await waitFor { find(view, matching: { string($0, kAXIdentifierAttribute) == "Mail.menuBar.viewMenu.sortBy" }) }
-        try press(sort)
-        return sort
-    }
-    private func selectSort(_ identifier: String, root: AXUIElement, app: NSRunningApplication) async throws {
-        let menu = try await sortMenu(root: root)
-        let item = try await waitFor { find(menu, matching: { string($0, kAXIdentifierAttribute) == identifier }) }
-        if string(item, kAXMenuItemMarkCharAttribute).isEmpty { try press(item) }
-        else { try key(53, app: app); try key(53, app: app) }
-        try await Task.sleep(for: .milliseconds(200))
-    }
-    private func press(_ node: AXUIElement) throws {
-        try Task.checkCancellation()
-        onTarget?(node, "Choosing " + string(node, kAXTitleAttribute))
-        guard AXUIElementPerformAction(node, kAXPressAction as CFString) == .success else {
-            throw failure("Mail’s search controls changed. Please retry from its main window.")
-        }
-    }
-
     private func set(_ node: AXUIElement, _ name: String, _ value: CFTypeRef) throws {
         try Task.checkCancellation()
         guard AXUIElementSetAttributeValue(node, name as CFString, value) == .success else {

@@ -163,7 +163,7 @@ final class DesktopController: DesktopTools {
                 guard let self else { return }
                 overlay.show(rect: frame(node), label: label, cursor: true)
             }).execute(try MailSearchRequest(query: action.value!))
-            return .init(app: "com.apple.mail", message: "Verified Apple Mail search for ‘\(action.value!)’ across All Mailboxes, newest first. Results are visible in Mail; message bodies have not been read by this tool.")
+            return .init(app: "com.apple.mail", message: "Verified Apple Mail search for ‘\(action.value!)’ across All Mailboxes. Existing sort order is unchanged. Results are visible in Mail; message bodies have not been read by this tool.")
         case "wait":
             try await Task.sleep(for: .milliseconds(700))
             return .init(app: observation.app, message: "Waited for the interface.")
