@@ -12,10 +12,13 @@ public struct DesktopElement: Codable, Sendable, Equatable {
     public let value: String
     public let enabled: Bool
     public let editable: Bool
+    public let selectable: Bool
+    public let selected: Bool
     public let actions: [String]
-    public init(id: String, role: String, label: String, value: String, enabled: Bool, editable: Bool, actions: [String]) {
+    public init(id: String, role: String, label: String, value: String, enabled: Bool, editable: Bool, actions: [String], selectable: Bool = false, selected: Bool = false) {
         self.id = id; self.role = role; self.label = label; self.value = value
         self.enabled = enabled; self.editable = editable; self.actions = actions
+        self.selectable = selectable; self.selected = selected
     }
 }
 public struct VisualSnapshot: Codable, Sendable, Equatable {
@@ -58,7 +61,7 @@ public struct PlannerAction: Codable, Sendable, Equatable {
     }
     public func validate(observation: DesktopObservation, apps: [DesktopApplication]) throws {
         let required: [String: Set<String>] = ["open_app":["app"], "open_url":["value"], "search_web":["value"],
-            "search_mail":["value"], "press":["target"], "set_text":["target","value"], "key":["value"],
+            "search_mail":["value"], "select":["target"], "read":["target"], "press":["target"], "set_text":["target","value"], "key":["value"],
             "scroll":["target","value"], "wait":[], "observe":[], "ask":["message"], "done":["message"], "vision_observe":["message"],
             "vision_click":["target", "value", "message"], "vision_scroll":["target", "value", "message"]]
         var fields = Set<String>()
@@ -88,6 +91,7 @@ public struct PlannerAction: Codable, Sendable, Equatable {
         }
         if let target {
             guard let e = observation.elements.first(where: { $0.id == target }), e.enabled else { throw AgentError.invalidAction }
+            if kind == "select", !e.selectable { throw AgentError.invalidAction }
             if kind == "press", Set(e.actions).isDisjoint(with: ["AXPress", "AXPick", "AXShowMenu"]) { throw AgentError.invalidAction }
             if kind == "set_text" {
                 guard e.editable, ["AXTextField", "AXTextArea", "AXSearchField", "AXComboBox"].contains(e.role),
@@ -107,6 +111,8 @@ public struct PlannerAction: Codable, Sendable, Equatable {
         case "search_mail": return "Searching Mail…"
         case "vision_observe": return "Looking at \(name)…"
         case "vision_click": return "Clicking \(message ?? "the visual target")…"
+        case "select": return "Selecting \(label?.isEmpty == false ? label! : "a result in " + name)…"
+        case "read": return "Reading \(label?.isEmpty == false ? label! : "content in " + name)…"
         case "press": return "Clicking \(label?.isEmpty == false ? label! : "a control in " + name)…"
         case "set_text": return "Typing in \(name)…"
         case "scroll", "vision_scroll": return "Scrolling \(name)…"
@@ -122,6 +128,8 @@ public struct PlannerAction: Codable, Sendable, Equatable {
 public enum DesktopRecoveryError: Error { case accessibilityUnavailable(String) }
 
 public protocol LanguagePlanner: Sendable {
+    func goal(task: String, context: JSONValue) async throws -> TaskGoal
+    func assess(task: String, context: JSONValue) async throws -> CompletionAssessment
     func plan(task: String, context: JSONValue) async throws -> PlannerAction
 }
 public struct DesktopToolResult: Sendable {
@@ -150,7 +158,7 @@ public struct NaturalResult: Sendable {
     public let planner: any LanguagePlanner
     public let tools: any DesktopTools
     public var maxSteps: Int
-    public init(planner: any LanguagePlanner, tools: any DesktopTools, maxSteps: Int = 16) {
+    public init(planner: any LanguagePlanner, tools: any DesktopTools, maxSteps: Int = 32) {
         self.planner = planner; self.tools = tools; self.maxSteps = maxSteps
     }
     public func run(task: String, app: String?, conversation: [ConversationTurn],
@@ -161,14 +169,40 @@ public struct NaturalResult: Sendable {
         var history: [JSONValue] = []
         var attempts: [(PlannerAction, DesktopObservation)] = []
         var inspections = 0
+        var completionRejections = 0
+        var feedback = ""
+        var evidence: [CompletionEvidence] = []
+        var observationNumber = 0
+        let started = ISO8601DateFormatter().string(from: Date())
+        let zone = TimeZone.current.identifier
+        onEvent("Understanding what needs to be verified…")
+        let goal = try await planner.goal(task: task, context: .object([
+            "conversation": try json(Array(conversation.suffix(6))),
+            "current_date": .string(started), "time_zone": .string(zone),
+        ]))
+        try goal.validate()
+        try Task.checkCancellation()
+        func record(_ observation: DesktopObservation) -> String {
+            let id = "o\(observationNumber)"; observationNumber += 1
+            evidence.append(CompletionEvidence(id: id, observation: observation))
+            evidence = Array(evidence.suffix(8))
+            return id
+        }
         for step in 0..<maxSteps {
             try Task.checkCancellation()
             let observation = try await tools.observe(app: activeApp)
+            let observationID = record(observation)
             let context: JSONValue = .object([
                 "installed_applications": try json(tools.applications),
                 "observation": try json(observation),
                 "conversation": try json(Array(conversation.suffix(6))),
-                "history": .array(history),
+                "history": .array(Array(history.suffix(12))),
+                "goal": try json(goal), "evidence": try json(evidence),
+                "observation_id": .string(observationID),
+                "completion_feedback": .string(feedback),
+                "completion_rejections": .number(completionRejections),
+                "remaining_steps": .number(maxSteps - step),
+                "request_started": .string(started),
                 "current_date": .string(ISO8601DateFormatter().string(from: Date())),
                 "time_zone": .string(TimeZone.current.identifier),
             ])
@@ -176,9 +210,39 @@ public struct NaturalResult: Sendable {
             var action = try await planner.plan(task: task, context: context)
             try Task.checkCancellation()
             try action.validate(observation: observation, apps: tools.applications)
-            if action.kind == "ask" || action.kind == "done" {
-                guard action.kind != "done" || !history.isEmpty else { throw AgentError.runtime("The planner did not take an action. Please clarify your request.") }
-                return NaturalResult(message: action.message!, needsInput: action.kind == "ask", steps: step)
+            if action.kind == "ask" {
+                return NaturalResult(message: action.message!, needsInput: true, steps: step)
+            }
+            if action.kind == "done" {
+                guard !history.isEmpty else { throw AgentError.runtime("The planner proposed completion without checking the app.") }
+                onEvent("Checking the result against your request…")
+                // Re-read after inference: a successful dispatch and an old screen
+                // are not proof that the requested result still exists.
+                if observation.vision != nil {
+                    _ = try await tools.execute(.init(kind: "vision_observe", message: "Verify the proposed result against a fresh window capture."), observation: observation)
+                }
+                let fresh = try await tools.observe(app: activeApp)
+                let currentID = record(fresh)
+                let assessment = try await planner.assess(task: task, context: .object([
+                    "goal": try json(goal), "proposal": .string(action.message!),
+                    "evidence": try json(evidence), "current_observation_id": .string(currentID),
+                    "observation": try json(fresh), "history": .array(Array(history.suffix(12))),
+                    "conversation": try json(Array(conversation.suffix(6))),
+                    "current_date": .string(ISO8601DateFormatter().string(from: Date())),
+                    "request_started": .string(started), "time_zone": .string(zone),
+                ]))
+                try Task.checkCancellation()
+                if assessment.accepts(goal: goal, evidence: evidence, currentID: currentID) {
+                    return NaturalResult(message: action.message!, needsInput: false, steps: step)
+                }
+                feedback = assessment.complete
+                    ? "Completion rejected: cite real observations for every success criterion. Tool acknowledgments and invented evidence cannot prove completion."
+                    : String(assessment.reason.prefix(2000))
+                completionRejections += 1
+                if completionRejections >= 3 {
+                    return NaturalResult(message: "I couldn’t verify the full request. " + feedback, needsInput: true, steps: step)
+                }
+                continue
             }
             let state = DesktopObservation(app: observation.app, name: observation.name, window: observation.window,
                 accessibility: observation.accessibility, truncated: observation.truncated, elements: observation.elements)
@@ -197,6 +261,7 @@ public struct NaturalResult: Sendable {
                 inspections = 0
             }
             attempts.append((intent, state))
+            completionRejections = 0
             if let reason = tools.confirmation(for: action, observation: observation) {
                 guard await approve(reason) else { throw CancellationError() }
                 try Task.checkCancellation()
@@ -217,7 +282,7 @@ public struct NaturalResult: Sendable {
             activeApp = result.app ?? activeApp
             history.append(.object(["action": try json(action), "result": .string(String(result.message.prefix(1500)))]))
         }
-        return NaturalResult(message: "I reached the action limit. Review the app before continuing.", needsInput: true, steps: maxSteps)
+        return NaturalResult(message: "I reached the action limit before verifying the full request. " + (feedback.isEmpty ? "Review the current result before continuing." : feedback), needsInput: true, steps: maxSteps)
     }
     private func json<T: Encodable>(_ value: T) throws -> JSONValue {
         try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(value))

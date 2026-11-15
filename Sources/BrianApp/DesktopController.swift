@@ -9,7 +9,8 @@ final class DesktopController: DesktopTools {
     func watchTargets(_ handler: @escaping (CGRect?) -> Void) { overlay.onTarget = handler }
     private(set) var confirmationPreview: VisualTargetPreview?
     private var pendingSnapshot: VisualSnapshot?
-    func finish() { overlay.hide(); vision.clear(); pendingSnapshot = nil; confirmationPreview = nil }
+    private var inspectionRoot: (pid: pid_t, node: AXUIElement)?
+    func finish() { overlay.hide(); vision.clear(); pendingSnapshot = nil; confirmationPreview = nil; inspectionRoot = nil }
     let applications: [DesktopApplication]
     private var applicationURLs: [String: URL] = [:]
     private var references: [String: AXUIElement] = [:]
@@ -42,6 +43,8 @@ final class DesktopController: DesktopTools {
     func observe(app: String?) async throws -> DesktopObservation {
         try Task.checkCancellation()
         let snapshot = pendingSnapshot
+        let inspection = inspectionRoot
+        inspectionRoot = nil
         pendingSnapshot = nil
         references.removeAll()
         windowReference = nil
@@ -71,21 +74,26 @@ final class DesktopController: DesktopTools {
             let role = string(node, kAXRoleAttribute)
             let subrole = string(node, kAXSubroleAttribute)
             if subrole == "AXSecureTextField" { return }
-            let title = string(node, kAXTitleAttribute).isEmpty ? string(node, kAXDescriptionAttribute) : string(node, kAXTitleAttribute)
+            let title = displayLabel(node)
             let windowLabel = ["AXCloseButton":"Close window", "AXMinimizeButton":"Minimize window", "AXZoomButton":"Zoom window"][subrole]
             let rawLabel = title.isEmpty ? (windowLabel ?? "") : title
             let label = String((menuPath + rawLabel).prefix(180))
-            let value = String(string(node, kAXValueAttribute).prefix(role == kAXTextAreaRole ? 1600 : 500))
+            let fullValue = string(node, kAXValueAttribute)
+            let value = String(fullValue.prefix(valueLimit(role)))
+            if fullValue.count > value.count { truncated = true }
             var names: CFArray?
             AXUIElementCopyActionNames(node, &names)
             let actions = names as? [String] ?? []
             var settable = DarwinBoolean(false)
             AXUIElementIsAttributeSettable(node, kAXValueAttribute as CFString, &settable)
-            if !label.isEmpty || !value.isEmpty || !actions.isEmpty || settable.boolValue || role == kAXScrollAreaRole {
+            var selectable = DarwinBoolean(false)
+            AXUIElementIsAttributeSettable(node, kAXSelectedAttribute as CFString, &selectable)
+            if !label.isEmpty || !value.isEmpty || !actions.isEmpty || settable.boolValue || selectable.boolValue || [kAXScrollAreaRole, "AXWebArea"].contains(role) {
                 let id = "e\(rows.count)"
                 let row = DesktopElement(id: id, role: role, label: label, value: value,
                     enabled: attribute(node, kAXEnabledAttribute) as? Bool ?? true,
-                    editable: settable.boolValue, actions: actions)
+                    editable: settable.boolValue, actions: actions, selectable: selectable.boolValue,
+                    selected: attribute(node, kAXSelectedAttribute) as? Bool ?? false)
                 rows.append(row); references[id] = node
                 characters += label.count + value.count + 80
             }
@@ -100,7 +108,25 @@ final class DesktopController: DesktopTools {
             ?? windows.first { attribute($0, kAXMainAttribute) as? Bool == true }
             ?? windows.first { attribute($0, kAXFocusedAttribute) as? Bool == true } ?? windows.first
         if let window {
-            windowReference = window; walk(window, depth: 0)
+            windowReference = window
+            if let inspection, inspection.pid == running.processIdentifier { walk(inspection.node, depth: 0) }
+            // Read document/message content before large sidebars and result lists
+            // consume the observation budget. This is role-based, not Mail-specific.
+            var contentNodes = 0
+            func contentRoots(_ node: AXUIElement, depth: Int) {
+                guard depth < 18, contentNodes < 500 else { return }
+                contentNodes += 1
+                let role = string(node, kAXRoleAttribute)
+                if string(node, kAXSubroleAttribute) == "AXSecureTextField" { return }
+                if ["AXWebArea", kAXTextAreaRole].contains(role) { walk(node, depth: 0); return }
+                if [kAXTableRole, kAXOutlineRole, kAXMenuBarRole].contains(role) { return }
+                for child in (attribute(node, kAXChildrenAttribute) as? [AXUIElement] ?? []).prefix(80) {
+                    contentRoots(child, depth: depth + 1)
+                }
+            }
+            contentRoots(window, depth: 0)
+            if let focused = element(root, kAXFocusedUIElementAttribute) { walk(focused, depth: 0) }
+            walk(window, depth: 0)
             overlay.show(rect: frame(window), label: "Reading \(name)", vision: snapshot != nil)
         } else { overlay.hide() }
         if let menu = element(root, kAXMenuBarAttribute) { walk(menu, depth: 0) }
@@ -262,18 +288,33 @@ final class DesktopController: DesktopTools {
         }
         guard let id = action.target, let node = references[id], let prior = observation.elements.first(where: { $0.id == id }),
               string(node, kAXRoleAttribute) == prior.role,
-              String(string(node, kAXValueAttribute).prefix(prior.role == kAXTextAreaRole ? 1600 : 500)) == prior.value,
+              String(string(node, kAXValueAttribute).prefix(valueLimit(prior.role))) == prior.value,
               attribute(node, kAXEnabledAttribute) as? Bool != false else { throw failure("The target changed while Brian was thinking. No action was taken.") }
         // Labels are checked separately from the menu path added to model context.
-        let label = string(node, kAXTitleAttribute).isEmpty ? string(node, kAXDescriptionAttribute) : string(node, kAXTitleAttribute)
+        let label = displayLabel(node)
         guard prior.label.hasSuffix(String(label.prefix(180))) || prior.label == String(label.prefix(180)) else {
             throw failure("The target label changed. No action was taken.")
         }
-        overlay.show(rect: frame(node), label: "\(action.kind == "set_text" ? "Typing in" : action.kind == "scroll" ? "Scrolling" : "Clicking") \(prior.label.isEmpty ? prior.role : prior.label)", cursor: true)
+        overlay.show(rect: frame(node), label: "\(action.kind == "set_text" ? "Typing in" : action.kind == "scroll" ? "Scrolling" : action.kind == "read" ? "Reading" : action.kind == "select" ? "Selecting" : "Clicking") \(prior.label.isEmpty ? prior.role : prior.label)", cursor: true)
         try await Task.sleep(for: .milliseconds(300))
         try Task.checkCancellation()
         guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { throw failure("You switched apps before the action. Stopped.") }
         switch action.kind {
+        case "read":
+            inspectionRoot = (pid, node)
+            return .init(app: observation.app, message: "Inspecting the selected content region next. Read its observed text before drawing conclusions.")
+        case "select":
+            var selectable = DarwinBoolean(false)
+            AXUIElementIsAttributeSettable(node, kAXSelectedAttribute as CFString, &selectable)
+            guard selectable.boolValue else {
+                throw DesktopRecoveryError.accessibilityUnavailable("This item no longer supports accessible selection. No selection was dispatched.")
+            }
+            guard AXUIElementSetAttributeValue(node, kAXSelectedAttribute as CFString, kCFBooleanTrue) == .success else {
+                throw failure("The item could not be selected. Review the app before retrying.")
+            }
+            _ = AXUIElementSetAttributeValue(node, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+            try await Task.sleep(for: .milliseconds(350))
+            guard attribute(node, kAXSelectedAttribute) as? Bool == true else { throw failure("Selection did not match the requested item. Review the app.") }
         case "press":
             var names: CFArray?
             AXUIElementCopyActionNames(node, &names)
@@ -317,6 +358,30 @@ final class DesktopController: DesktopTools {
         }
         try await Task.sleep(for: .milliseconds(250))
         return .init(app: observation.app, message: "Applied \(action.kind) to \(prior.label.isEmpty ? prior.role : prior.label); checking the resulting UI next.")
+    }
+
+    private func valueLimit(_ role: String) -> Int {
+        [kAXTextAreaRole, kAXStaticTextRole, "AXWebArea"].contains(role) ? 4000 : 500
+    }
+    private func displayLabel(_ node: AXUIElement) -> String {
+        let title = string(node, kAXTitleAttribute)
+        let description = string(node, kAXDescriptionAttribute)
+        if !title.isEmpty { return title }
+        if !description.isEmpty { return description }
+        guard [kAXRowRole, kAXCellRole].contains(string(node, kAXRoleAttribute)) else { return "" }
+        var queue: [(AXUIElement, Int)] = [(node, 0)]
+        var values: [String] = []
+        var index = 0
+        while index < queue.count, index < 40, values.count < 5 {
+            let (item, depth) = queue[index]; index += 1
+            if string(item, kAXSubroleAttribute) == "AXSecureTextField" { continue }
+            let value = String(string(item, kAXValueAttribute).prefix(120))
+            if !value.isEmpty, !values.contains(value) { values.append(value) }
+            if depth < 4 {
+                queue += (attribute(item, kAXChildrenAttribute) as? [AXUIElement] ?? []).prefix(12).map { ($0, depth + 1) }
+            }
+        }
+        return values.joined(separator: " · ")
     }
 
     private func sendKey(_ key: String, app: NSRunningApplication) throws {

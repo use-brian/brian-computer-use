@@ -47,13 +47,25 @@ field or an offered keyboard shortcut. There is no arbitrary shell, script
 execution, or guarantee that every request can be completed. Terminal, Script Editor, system/security settings, and secure text
 fields require manual control.
 
-Each run is limited to 16 actions. Invalid or stale targets, changed documents,
+Each run is limited to 32 planning steps. Invalid or stale targets, changed documents,
 uncertain execution failures, and cancellation stop the run. A capability check
 that proves no action was dispatched, or repeated unchanged Accessibility actions,
 can trigger vision recovery. Partially applied edits are never blindly retried.
-Text actions verify exact readback. The planner uses the next observation to
-assess completion; its final prose is a model assessment, not a universal
-independent proof of the user's entire goal. No successful action is blindly
+Text actions verify exact readback. The original request is preserved verbatim.
+A proposed completion triggers another fresh observation and a separate local
+review against the whole request. The review must cite actual observation IDs;
+tool acknowledgments and search hit counts cannot establish an information answer.
+Rejected completion feeds the missing work back into planning and requires a
+further tool action before another completion proposal. Three consecutive
+unsupported completion proposals stop with an explicit incomplete result.
+
+The last eight bounded observations are retained in memory so earlier-read facts
+remain available while navigating. Accessible result rows can be selected and
+content regions inspected directly. Relative dates use the request's local date;
+flight searches must check departure dates in the content, not received dates.
+The reviewer uses the same local base model in a separate inference pass. Citation
+validation prevents invented sources, but semantic judgment can still be wrong;
+this is not a guarantee of arbitrary task completion. No successful action is blindly
 retried after an execution error. Consequential controls such as Send/Delete and
 submission/paste/save shortcuts request confirmation; review these in the app.
 This confirmation layer is heuristic, not a complete security boundary for all
@@ -178,7 +190,7 @@ Input + in-memory conversation
 
 ## Validation on 2026-11-15
 
-45 Swift tests and 7 Python validation tests pass. Real local-model checks mapped
+50 Swift tests and 15 Python validation tests pass. Real local-model checks mapped
 varied email/app/document requests to tools, including a contextual follow-up
 (“What about invoices from them?” → a Draper invoice search). A live run of the
 previously rejected “search cathay emails for me” changed the visible Mail query
@@ -215,3 +227,21 @@ When a task ends it displays the actual reply beside the pet in a dismissible,
 scrollable speech bubble. New work hides the reply; the bar still provides a
 reply button for reopening the result. Right-click the pet and choose **Read last
 reply** to reopen and select its text.
+
+### Goal completion checks
+
+`scripts/smoke-goal-verification.py /path/to/model` exercises the actual local
+weights with synthetic evidence: search-only and wrong-event-date answers are
+rejected, supported flight details and a simple open-app request are accepted,
+and a missing PDF export keeps a multi-step request incomplete. The planner
+selects a result after a search instead of stopping. `Tests/Fixtures/WorkflowDemo.swift`
+provides a native two-booking list with departure dates available only after
+selection, for checking the full generic observation/action/review workflow.
+
+The final 0.5.0 bundled app also passed a fresh live fixture run: starting with
+neither booking selected, it opened the first confirmation (departure 13 Nov),
+continued to the second (departure 16 Nov), and returned QX200 at 14:20 for the
+16 Nov request. The selected content and final reply were independently checked.
+An earlier run exposed repeated premature completion; the verifier rejected it,
+and the final planner now requires a recovery action before proposing completion
+again. This is one controlled workflow, not a general reliability benchmark.

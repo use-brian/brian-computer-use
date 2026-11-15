@@ -27,6 +27,12 @@ public actor MCPRuntime: AgentBackend, LanguagePlanner {
         try await tool("mac_status").decoded(RuntimeStatus.self)
     }
 
+    public func goal(task: String, context: JSONValue) async throws -> TaskGoal {
+        try await tool("brian_goal", ["task": .string(task), "context": context]).decoded(TaskGoal.self)
+    }
+    public func assess(task: String, context: JSONValue) async throws -> CompletionAssessment {
+        try await tool("brian_assess", ["task": .string(task), "context": context]).decoded(CompletionAssessment.self)
+    }
     public func plan(task: String, context: JSONValue) async throws -> PlannerAction {
         try await tool("brian_plan", ["task": .string(task), "context": context]).decoded(PlannerAction.self)
     }

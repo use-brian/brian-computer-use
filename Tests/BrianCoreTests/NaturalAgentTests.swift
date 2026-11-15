@@ -5,7 +5,22 @@ import AppKit
 private actor ScriptedPlanner: LanguagePlanner {
     var actions: [PlannerAction]
     var contexts: [JSONValue] = []
-    init(_ actions: [PlannerAction]) { self.actions = actions }
+    var reviews: [JSONValue] = []
+    var assessments: [CompletionAssessment]
+    init(_ actions: [PlannerAction], assessments: [CompletionAssessment] = []) { self.actions = actions; self.assessments = assessments }
+    func goal(task: String, context: JSONValue) async throws -> TaskGoal {
+        .init(objective: task, criteria: ["Requested outcome is visible"])
+    }
+    func assess(task: String, context: JSONValue) async throws -> CompletionAssessment {
+        reviews.append(context)
+        if !assessments.isEmpty { return assessments.removeFirst() }
+        let current = context["current_observation_id"].string!
+        let value = context["observation"]["elements"].array[0]["value"].string!
+        return .init(complete: true, reason: "Verified fixture result", checks: [
+            .init(criterion: 0, satisfied: true, evidence: [.init(observation: current, element: "e0", quote: value)])
+        ])
+    }
+    func capturedReviews() -> [JSONValue] { reviews }
     func plan(task: String, context: JSONValue) async throws -> PlannerAction {
         contexts.append(context)
         guard !actions.isEmpty else { throw AgentError.invalidAction }
@@ -45,7 +60,7 @@ private actor ScriptedPlanner: LanguagePlanner {
         let result = try await NaturalAgent(planner: planner, tools: desktop).run(task: "Please do that for me", app: nil,
             conversation: [], approve: { _ in true }, onEvent: { _ in })
         XCTAssertEqual(result.steps, 1)
-        XCTAssertEqual(desktop.observed, 2)
+        XCTAssertEqual(desktop.observed, 3, "Completion gets another fresh observation after planning")
         let contexts = await planner.captured()
         XCTAssertEqual(contexts[1]["history"].array.count, 1)
         XCTAssertEqual(contexts[1]["observation"]["elements"].array.first?["value"].string, "1")
@@ -123,6 +138,65 @@ private actor ScriptedPlanner: LanguagePlanner {
         _ = try await NaturalAgent(planner: planner, tools: desktop).run(task: "Continue", app: nil,
             conversation: [], approve: { _ in true }, onEvent: { _ in })
         XCTAssertEqual(desktop.executed.map(\.kind), ["open_app", "observe", "vision_observe", "vision_click"])
+    }
+    func testPrematureSearchCompletionContinuesWithReviewerFeedback() async throws {
+        let rejected = CompletionAssessment(complete: false, reason: "Read the result and verify its departure date", checks: [.init(criterion: 0, satisfied: false, evidence: [])])
+        let planner = ScriptedPlanner([.init(kind: "search_mail", value: "flight"),
+            .init(kind: "done", message: "Search is open"), .init(kind: "read", target: "e0"),
+            .init(kind: "done", message: "Verified flight details")], assessments: [rejected])
+        let desktop = FakeDesktop()
+        let result = try await NaturalAgent(planner: planner, tools: desktop).run(task: "Find my flights tomorrow in email", app: nil,
+            conversation: [], approve: { _ in true }, onEvent: { _ in })
+        XCTAssertFalse(result.needsInput)
+        XCTAssertEqual(desktop.executed.map(\.kind), ["search_mail", "read"])
+        let contexts = await planner.captured()
+        XCTAssertEqual(contexts[2]["completion_feedback"].string, rejected.reason)
+        let reviews = await planner.capturedReviews()
+        XCTAssertEqual(reviews.count, 2)
+        XCTAssertGreaterThan(reviews[1]["evidence"].array.count, reviews[0]["evidence"].array.count)
+    }
+    func testRepeatedUnsupportedCompletionStopsAsIncomplete() async throws {
+        let rejected = CompletionAssessment(complete: false, reason: "No departure date has been read", checks: [.init(criterion: 0, satisfied: false, evidence: [])])
+        let planner = ScriptedPlanner([.init(kind: "search_mail", value: "flight"),
+            .init(kind: "done", message: "Done"), .init(kind: "done", message: "Done"), .init(kind: "done", message: "Done")], assessments: [rejected, rejected, rejected])
+        let desktop = FakeDesktop()
+        let result = try await NaturalAgent(planner: planner, tools: desktop).run(task: "Find my flights tomorrow", app: nil,
+            conversation: [], approve: { _ in true }, onEvent: { _ in })
+        XCTAssertTrue(result.needsInput)
+        XCTAssertTrue(result.message.contains("couldn’t verify"))
+        XCTAssertEqual(desktop.executed.count, 1)
+    }
+    func testForgedEvidenceCannotApproveCompletion() async throws {
+        let forged = CompletionAssessment(complete: true, reason: "Looks done", checks: [.init(criterion: 0, satisfied: true,
+            evidence: [.init(observation: "invented", element: "e0", quote: "flight tomorrow")])])
+        let planner = ScriptedPlanner([.init(kind: "search_mail", value: "flight"), .init(kind: "done", message: "Found your flight"),
+            .init(kind: "ask", message: "The flight date is not visible")], assessments: [forged])
+        let result = try await NaturalAgent(planner: planner, tools: FakeDesktop()).run(task: "Find my flight tomorrow", app: nil,
+            conversation: [], approve: { _ in true }, onEvent: { _ in })
+        XCTAssertTrue(result.needsInput)
+        let contexts = await planner.captured()
+        XCTAssertTrue(contexts.last!["completion_feedback"].string!.contains("invented evidence"))
+    }
+    func testEveryCriterionNeedsAnActualQuotedObservation() throws {
+        let goal = TaskGoal(objective: "Both outcomes", criteria: ["First", "Second"])
+        let evidence = [CompletionEvidence(id: "o1", observation: DesktopObservation(app: "test", name: "Test", window: "Saved document",
+            accessibility: true, truncated: false, elements: []))]
+        let cite = EvidenceCitation(observation: "o1", element: "window", quote: "Saved document")
+        let missing = CompletionAssessment(complete: true, reason: "done", checks: [.init(criterion: 0, satisfied: true, evidence: [cite])])
+        XCTAssertFalse(missing.accepts(goal: goal, evidence: evidence, currentID: "o1"))
+        let bad = CompletionAssessment(complete: true, reason: "done", checks: [
+            .init(criterion: 0, satisfied: true, evidence: [cite]),
+            .init(criterion: 1, satisfied: true, evidence: [.init(observation: "o1", element: "window", quote: "Sent email")])])
+        XCTAssertFalse(bad.accepts(goal: goal, evidence: evidence, currentID: "o1"))
+    }
+    func testSelectOnlyAcceptsObservedSelectableItems() throws {
+        let row = DesktopElement(id: "e1", role: "AXRow", label: "Flight confirmation", value: "", enabled: true,
+            editable: false, actions: [], selectable: true)
+        let observation = DesktopObservation(app: "test", name: "Test", window: "Mail", accessibility: true, truncated: false, elements: [row])
+        XCTAssertNoThrow(try PlannerAction(kind: "select", target: "e1").validate(observation: observation, apps: []))
+        XCTAssertNoThrow(try PlannerAction(kind: "read", target: "e1").validate(observation: observation, apps: []))
+        XCTAssertThrowsError(try PlannerAction(kind: "press", target: "e1").validate(observation: observation, apps: []))
+        XCTAssertThrowsError(try PlannerAction(kind: "select", target: "missing").validate(observation: observation, apps: []))
     }
     func testPIDMouseEventsKeepWindowRelativeCoordinates() throws {
         let frame = CGRect(x: -800, y: 200, width: 800, height: 492)
