@@ -4,7 +4,9 @@
 
 The app keeps a single input line and an animated cyan companion. Brian runs to
 the bar when it opens, shrinks beside the current action target while working,
-and returns to the bar afterward. Manual dragging takes priority; motion respects
+and returns to the bar afterward. Closing the bar sends Brian back to the screen
+edge nearest its resting position; a running task keeps target-following active
+and returns to the edge when finished. Manual dragging takes priority; motion respects
 Reduce Motion and stays within the active display. Click the pet
 to open the input, drag it to move, or right-click for Open/Stop/Hide. Replies,
 clarifications, and action confirmations appear only when relevant. The lower
@@ -176,7 +178,7 @@ Input + in-memory conversation
 
 ## Validation on 2026-11-15
 
-44 Swift tests and 7 Python validation tests pass. Real local-model checks mapped
+45 Swift tests and 7 Python validation tests pass. Real local-model checks mapped
 varied email/app/document requests to tools, including a contextual follow-up
 (“What about invoices from them?” → a Draper invoice search). A live run of the
 previously rejected “search cathay emails for me” changed the visible Mail query

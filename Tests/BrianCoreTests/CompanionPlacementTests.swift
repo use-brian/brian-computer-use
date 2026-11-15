@@ -2,6 +2,17 @@ import XCTest
 @testable import BrianCore
 
 final class CompanionPlacementTests: XCTestCase {
+    func testReturnToSideUsesRestingSideAndClampsToDisplay() {
+        let screen = CGRect(x: -1440, y: 25, width: 1440, height: 850)
+        let size = CGSize(width: 146, height: 138)
+        let left = CompanionPlacement.atSide(CGRect(x: -1300, y: 300, width: 146, height: 138), size: size, screen: screen)
+        XCTAssertEqual(left.minX, screen.minX + 20)
+        XCTAssertEqual(left.minY, 300)
+        let right = CompanionPlacement.atSide(CGRect(x: -200, y: 900, width: 146, height: 138), size: size, screen: screen)
+        XCTAssertEqual(right.maxX, screen.maxX - 20)
+        XCTAssertTrue(screen.contains(right))
+    }
+
     func testTargetNearLeftEdgeUsesUnobstructedSide() {
         let screen = CGRect(x: 0, y: 25, width: 1440, height: 850)
         let target = CGRect(x: 4, y: 400, width: 90, height: 32)

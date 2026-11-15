@@ -226,6 +226,7 @@ final class CompanionController {
     private var movement: Task<Void, Never>?
     private var movementID = UUID()
     private var bar: CGRect?
+    private var restingFrame: CGRect?
     private var hiddenByUser = false
     private var manualUntil = Date.distantPast
     private var interacting = false
@@ -261,6 +262,7 @@ final class CompanionController {
         let targetScreen = NSScreen.screens.first { $0.visibleFrame.contains(point) }?.visibleFrame ?? screen
         motion.compact = model.isRunning
         panel.setFrame(CompanionPlacement.clamp(CGRect(origin: point, size: model.isRunning ? cursorSize : normalSize), to: targetScreen), display: true)
+        restingFrame = panel.frame
         panel.orderFrontRegardless()
     }
 
@@ -271,6 +273,19 @@ final class CompanionController {
         let size = model.isRunning ? cursorSize : normalSize
         motion.compact = model.isRunning
         move(to: CompanionPlacement.byBar(frame, size: size, screen: screen(for: frame)))
+    }
+
+    func barClosed() {
+        bar = nil
+        guard !model.isRunning else { return }
+        returnToSide()
+    }
+
+    private func returnToSide() {
+        guard !hiddenByUser, !interacting else { return }
+        motion.compact = false
+        let home = restingFrame ?? panel.frame
+        move(to: CompanionPlacement.atSide(home, size: normalSize, screen: screen(for: home)))
     }
 
     private func follow(_ target: CGRect) {
@@ -288,7 +303,7 @@ final class CompanionController {
         } else {
             motion.compact = false
             if let bar { runToBar(bar) }
-            else { move(to: CompanionPlacement.clamp(CGRect(origin: panel.frame.origin, size: normalSize), to: screen(for: panel.frame))) }
+            else { returnToSide() }
         }
     }
 
@@ -341,6 +356,7 @@ final class CompanionController {
         guard dragged else { return }
         let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) }?.visibleFrame ?? screen(for: panel.frame)
         panel.setFrame(CompanionPlacement.clamp(panel.frame, to: screen), display: true)
+        restingFrame = panel.frame
         UserDefaults.standard.set([panel.frame.minX, panel.frame.minY], forKey: "companionPosition")
         manualUntil = Date().addingTimeInterval(2)
     }

@@ -20,6 +20,12 @@ public enum CompanionPlacement {
         if screen.contains(above) { return above }
         return clamp(CGRect(x: bar.minX+8, y: bar.minY-size.height-10, width: size.width, height: size.height), to: screen)
     }
+    /// Return to the side nearest the user's resting position, preserving height.
+    public static func atSide(_ home: CGRect, size: CGSize, screen: CGRect) -> CGRect {
+        let inset: CGFloat = 20
+        let x = home.midX < screen.midX ? screen.minX + inset : screen.maxX - size.width - inset
+        return clamp(CGRect(x: x, y: home.minY, width: size.width, height: size.height), to: screen)
+    }
     public static func clamp(_ frame: CGRect, to screen: CGRect) -> CGRect {
         CGRect(x: min(max(frame.minX, screen.minX), max(screen.minX, screen.maxX-frame.width)),
                y: min(max(frame.minY, screen.minY), max(screen.minY, screen.maxY-frame.height)),

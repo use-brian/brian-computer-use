@@ -38,9 +38,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.contentView = NSHostingView(rootView: CommandView(model: model) { [weak self] in
-            self?.panel.orderOut(nil)
+            self?.hidePanel()
         })
-        model.onComplete = { [weak self] in self?.panel.orderOut(nil) }
+        model.onComplete = { [weak self] in self?.hidePanel() }
         model.onScreenRecordingNeeded = { [weak self] in self?.showPermissionGuide(vision: true) }
         model.onAccessibilityNeeded = { [weak self] in self?.showPermissionGuide() }
 
@@ -66,7 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         shortcut = GlobalShortcut { [weak self] in
             guard let self else { return }
-            if panel.isVisible && panel.isKeyWindow { panel.orderOut(nil) }
+            if panel.isVisible && panel.isKeyWindow { hidePanel() }
             else { showPanel() }
         }
         if !shortcut.register() {
@@ -89,6 +89,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.makeKeyAndOrderFront(nil)
         model.focusToken = UUID()
         companion?.runToBar(panel.frame)
+    }
+
+    private func hidePanel() {
+        panel.orderOut(nil)
+        companion?.barClosed()
     }
 
     @objc private func showCompanion() { companion.show() }
