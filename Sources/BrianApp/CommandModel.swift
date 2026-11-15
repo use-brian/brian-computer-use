@@ -4,19 +4,27 @@ import BrianCore
 
 @MainActor
 final class CommandModel: ObservableObject {
+    @Published var activityTarget: CGRect?
     @Published var instruction = ""
-    @Published var status = "Give the local agent a task in Finder or TextEdit."
+    @Published var status = ""
     @Published var isRunning = false
     @Published var hasError = false
     @Published var needsAccessibility = false
-    @Published var isVerified = false
+    @Published var needsScreenRecording = false
+    @Published var isFinished = false
+    @Published var hasResponse = false
+    @Published var responseVersion = 0
+    @Published var confirmationPreview: VisualTargetPreview?
+    @Published var pendingConfirmation: String?
     @Published var focusToken = UUID()
-    @Published var target: AgentApp = .textEdit
-    @Published var events: [String] = []
-    @Published var modelStatus = "Qwen3.5-4B · local adapter"
     private var task: Task<Void, Never>?
+    private var approval: CheckedContinuation<Bool, Never>?
     private let runtime: MCPRuntime
+    private let desktop = DesktopController()
+    private var conversation: [ConversationTurn] = []
+    private var foregroundApp: String?
     var onComplete: (() -> Void)?
+    var onScreenRecordingNeeded: (() -> Void)?
     var onAccessibilityNeeded: (() -> Void)?
 
     init() {
@@ -24,50 +32,33 @@ final class CommandModel: ObservableObject {
             ?? Bundle.main.resourceURL!.appendingPathComponent("mac-control")
         let host = Bundle.main.executableURL!.deletingLastPathComponent().appendingPathComponent("brian-runtime-host")
         runtime = MCPRuntime(executable: bundle.appendingPathComponent("mac-control"), host: host)
+        desktop.watchTargets { [weak self] rect in self?.activityTarget = rect }
     }
 
     func submit() {
         guard !isRunning else { return }
-        let text = instruction
-        let app = target
-        hasError = false
-        isVerified = false
-        needsAccessibility = false
-        events = []
+        let text = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        hasError = false; isFinished = false; hasResponse = false; needsAccessibility = false; needsScreenRecording = false
         isRunning = true
         task = Task { [self] in
-            defer { isRunning = false; task = nil }
+            defer { desktop.finish(); isRunning = false; task = nil }
             do {
-                if let search = try MailSearchRequest.parse(text) {
-                    status = "Searching Apple Mail…"
-                    try await MailSearchExecutor().execute(search)
-                    try Task.checkCancellation()
-                    status = "Showing Mail results for ‘\(search.query)’, newest first."
-                    isVerified = true
-                    instruction = ""
-                    onComplete?()
-                    return
-                }
-                // Keep instant launcher commands; everything else goes through
-                // the bundled model, not the old command parser.
-                do {
-                    let action = try InstructionParser().parse(text)
-                    status = action.label
-                    try await ActionExecutor().execute(action)
-                    status = "Opened. What’s next?"
-                    instruction = ""
-                    onComplete?()
-                    return
-                } catch InstructionError.unsupported { /* Agent task. */ }
-                let result = try await AgentLoop(backend: runtime).run(task: text, app: app) { [weak self] event in
-                    await self?.record(event)
-                }
+                let result = try await NaturalAgent(planner: runtime, tools: desktop).run(
+                    task: text, app: foregroundApp, conversation: conversation,
+                    approve: { [weak self] reason in await self?.requestApproval(reason) ?? false },
+                    onEvent: { [weak self] message in self?.status = message })
                 try Task.checkCancellation()
                 status = result.message
-                if case .verified = result { isVerified = true }
-                modelStatus = "Qwen3.5-4B + LoRA · local"
+                isFinished = !result.needsInput && result.steps > 0
+                hasResponse = true
+                conversation += [ConversationTurn(role: "user", content: text), ConversationTurn(role: "assistant", content: result.message)]
+                conversation = Array(conversation.suffix(6))
+                instruction = ""
+                responseVersion += 1
             } catch is CancellationError {
-                status = "Stopped. Actions already applied remain in the app; review before continuing."
+                status = "Stopped. Review any actions already applied."
+                hasResponse = true; responseVersion += 1
             } catch {
                 if Task.isCancelled {
                     status = "Stopped. Review the app before continuing."
@@ -75,35 +66,48 @@ final class CommandModel: ObservableObject {
                     status = error.localizedDescription
                     hasError = true
                     needsAccessibility = (error as? AgentError) == .accessibility
+                    needsScreenRecording = (error as? AgentError) == .screenRecording
+                    if needsScreenRecording { onScreenRecordingNeeded?() }
                     if needsAccessibility { onAccessibilityNeeded?() }
                 }
+                hasResponse = true; responseVersion += 1
+                conversation += [ConversationTurn(role: "user", content: text), ConversationTurn(role: "assistant", content: status)]
+                conversation = Array(conversation.suffix(6))
             }
+            if let active = NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+               active != Bundle.main.bundleIdentifier { foregroundApp = active }
         }
     }
 
+    private func requestApproval(_ reason: String) async -> Bool {
+        guard !Task.isCancelled else { return false }
+        confirmationPreview = desktop.confirmationPreview
+        pendingConfirmation = reason
+        return await withCheckedContinuation { approval = $0 }
+    }
+    func resolveApproval(_ allow: Bool) {
+        let waiting = approval
+        approval = nil; pendingConfirmation = nil; confirmationPreview = nil
+        waiting?.resume(returning: allow)
+    }
     func stop() {
         guard isRunning else { return }
+        desktop.finish()
         status = "Stopping…"
         task?.cancel()
-        // MCP cancellation tears down the model's whole process group. Do not
-        // allow a second task until the existing run unwinds.
+        resolveApproval(false)
     }
-
-    func record(_ event: AgentEvent) {
-        guard !Task.isCancelled else { return }
-        status = event.message
-        events.append(event.step == 0 ? event.message : "\(event.step). \(event.message)")
-        events = Array(events.suffix(6))
-    }
-
     func captureTarget() {
-        guard !isRunning, let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
-              let app = AgentApp.allCases.first(where: { $0.bundleIdentifier == bundleID }) else { return }
-        target = app
+        guard !isRunning, let id = NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+              id != Bundle.main.bundleIdentifier else { return }
+        foregroundApp = id
     }
-
+    func newTask() {
+        guard !isRunning else { return }
+        conversation = []; instruction = ""; status = ""; hasResponse = false; hasError = false; isFinished = false
+    }
     func shutdown() async {
-        task?.cancel()
+        task?.cancel(); resolveApproval(false)
         await runtime.shutdown()
     }
 }

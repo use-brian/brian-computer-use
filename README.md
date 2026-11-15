@@ -1,188 +1,203 @@
 # Brian Computer Use
 
-**Control + Option + Space → type a task → Enter → local agent loop.**
+**Control + Option + Space → say what you want → Brian plans and acts locally.**
 
-Brian is a native macOS command line: mascot, text input, and Send/Stop. It runs the fine-tuned model from
-`llm-research` locally, repeatedly observing the selected app, proposing one
-action, executing it, and checking the resulting accessibility tree. Model details,
-step logs, examples, and keyboard hints stay out of the input. An attention icon
-opens essential error or stopped-task feedback when needed.
+The app keeps a single input line and an animated cyan companion. Brian runs to
+the bar when it opens, shrinks beside the current action target while working,
+and returns to the bar afterward. Manual dragging takes priority; motion respects
+Reduce Motion and stays within the active display. Click the pet
+to open the input, drag it to move, or right-click for Open/Stop/Hide. Replies,
+clarifications, and action confirmations appear only when relevant. The lower
+name badge is removed. Reduce Motion is respected.
 
-The floating **Brian companion** uses the existing cyan pixel mascot. Click it
-to open the command panel, drag it to reposition, or right-click for Open, Stop,
-and Hide. Its position is remembered. It blinks and bobs while idle, moves its
-feet while working, and smiles after verified completion. macOS Reduce Motion
-disables the motion. Restore a hidden companion from the menu-bar menu. Dragging
-tracks the pointer in screen coordinates, with a five-point threshold to separate
-clicks from drags. It stays under the pointer across screen boundaries, then
-settles inside the available screen area and saves its position on release.
+## Natural language, not command templates
 
-## Current scope
+Every request now goes to the bundled language model. The old launcher/mail
+regex parsers remain as legacy utilities and regression tests; they do not gate
+or route the live input. Examples:
 
-- **Apple Mail search:** “Find the latest Draper email” or “Search my emails for
-  invoices” opens Mail's search across **All Mailboxes**, ordered by received date,
-  newest first. Results stay in Mail, where you can inspect and open them. Mail's
-  normal keyword search can match sender, subject, and message content. This is a
-  dedicated local Accessibility workflow, not inference by the research adapter.
-  It requires Mail to be configured and its main search field visible. It changes
-  search and sort controls; it does not compose, send, delete, or summarize email.
-  The initial natural-language grammar supports find/search/show requests with
-  an email keyword and a search term; it is not general email reasoning.
-- **Model:** Qwen3.5-4B, MLX 4-bit conversion, with the `mac-ax-bootstrap-v0` LoRA adapter.
-- **Model-controlled apps:** Finder and TextEdit. Select the fallback target in the menu bar's **Work in** menu. Opening Brian
-  while either app is frontmost selects that app automatically.
-- **Actions:** accessibility press and text replacement. Input is accessibility
-  text; screenshots and voice are not used.
-- **Loop:** at most 12 actions per submission, fresh observation after each
-  action, stop on repeated states, invalid actions, runtime failure, or model stop.
-- **Control:** Stop or Escape cancels the run, including model/native subprocesses.
-  Closing the panel keeps work running; quitting Brian stops the runtime.
+- “Could you pull up the most recent email I got from Draper?”
+- “Bring up my calculator please.”
+- “Open Calculator and work out 17 times 23.”
+- “I need a new text document with a short thank-you note to Sam.”
+- “What about invoices from them?” after an email search.
 
-The adapter was trained on synthetic single-action examples. This loop adds
-execution orchestration; it does not retrain the model or turn it into a proven
-general-purpose planner. Complex instructions can still stop early or fail.
-Runtime rules can refine model proposals, including binding exact user text.
+The planner sees the installed apps, current accessibility snapshot, recent
+conversation, and this task's tool results. It chooses one action, executes it,
+re-observes, and chooses the next step. It asks a question if information or a
+capability is missing. Conversation context stays in memory; **New conversation**
+in the menu bar clears it. Stop/Escape cancels the current run.
 
-## Build the full app
+### Available actions
 
-The repository lives at `~/work-dev/use-brian/brian-computer-use`.
-Requires Apple Silicon and Swift 6+/Xcode. The supplied research runtime's native
-helper targets **macOS 27.2**, so full app builds currently require macOS 27.2+.
-The Swift UI alone targets macOS 14+. Older runtime compatibility is unverified.
+Open installed apps, open HTTP(S) addresses, search the web, search Apple Mail,
+press accessible controls, replace text, use a small set of keyboard shortcuts,
+and scroll supported areas. When Accessibility is blocked, capture the current
+window, locate a visible target, then click or scroll using vision. Mail search uses All Mailboxes and verifies
+received-date/newest-first ordering; Mail's normal search can match sender,
+subject, and message content. Results stay in Mail.
 
-First build `dist/mac-control` in your `llm-research` checkout using its packaging
-instructions. Then, from this repository:
+Generic app control is no longer limited to Finder and TextEdit. It relies on
+Accessibility first, then uses local vision for custom canvases or missing
+controls. Hidden controls and complex workflows may still fail. Visual navigation
+currently supports clicking and scrolling; text entry requires an accessible
+field or an offered keyboard shortcut. There is no arbitrary shell, script
+execution, or guarantee that every request can be completed. Terminal, Script Editor, system/security settings, and secure text
+fields require manual control.
 
-```sh
-bash scripts/build-app.sh --research-root /absolute/path/to/llm-research
-open dist/Brian.app
-```
+Each run is limited to 16 actions. Invalid or stale targets, changed documents,
+uncertain execution failures, and cancellation stop the run. A capability check
+that proves no action was dispatched, or repeated unchanged Accessibility actions,
+can trigger vision recovery. Partially applied edits are never blindly retried.
+Text actions verify exact readback. The planner uses the next observation to
+assess completion; its final prose is a model assessment, not a universal
+independent proof of the user's entire goal. No successful action is blindly
+retried after an execution error. Consequential controls such as Send/Delete and
+submission/paste/save shortcuts request confirmation; review these in the app.
+This confirmation layer is heuristic, not a complete security boundary for all
+possible third-party interfaces.
 
-Alternatively, supply an already packaged runtime:
+## Accessibility-first navigation and visible focus
 
-```sh
-bash scripts/build-app.sh --runtime-bundle /absolute/path/to/mac-control
-```
+Every planning turn starts with fresh Accessibility data. A missing/unsupported
+control triggers `vision_observe` with a reason; screenshots are not the default.
+A dedicated visual step uses the same local multimodal model with a smaller
+action set, then a short, separate grounding pass locates the target. Images are single-use and kept in memory only.
+After a visual action, Brian returns to Accessibility and requests another image
+only if needed. Screenshots and image bytes never enter conversation history.
 
-The resulting **approximately 3.3 GB `Brian.app` contains the base weights,
-adapter, Python, MLX, MCP server, and native accessibility helper**. It needs no
-separate Python installation, research checkout, API key, network listener, or
-model download at runtime. The model stays loaded between tasks. Cancelling an
-in-flight runtime request terminates its process group; quitting always shuts
-the runtime down. A later task restarts the runtime when needed.
+A click-through overlay shows the current app/target and action: **teal for
+Accessibility**, **orange for vision**. A virtual cursor previews the target
+without warping your real pointer. The overlay does not activate windows or
+intercept clicks, and disappears on Stop/completion/error. It uses global display
+coordinates, including screens to the left/above the main display. There is no
+motion animation in the overlay. The pet indicates Thinking/Looking/Working; the single chat line shows the current
+action while running and returns to the input afterward.
 
-Weights and generated bundles stay out of Git. The bundle contains model
-attribution, licensing, resource hashes, and (when `--research-root` is used)
-the research model card and dependency lockfile. Packaging uses ad-hoc signing
-for local development; distribution signing/notarization is not configured.
+Vision captures only the selected application window through ScreenCaptureKit,
+without audio or the overlay. It needs macOS **Screen & System Audio Recording**
+access; the guide opens the relevant pane when fallback first needs it. Visual
+clicks ask for confirmation because their semantics cannot be validated through
+Accessibility. The preview marks the proposed target on the captured window, both in the
+confirmation popover and in the desktop overlay. Before dispatch, Brian
+checks the same process/window/frame, the image age, and a fresh screenshot;
+a changed target or page stops execution. This is conservative and may stop on
+animated content. It is not a guarantee of semantic correctness.
 
-## First run
+## Local model
 
-1. Open Finder or TextEdit and select the window to work in.
-2. Open Brian, type an instruction, and press Enter. The frontmost supported app
-   is selected automatically; use the menu bar's **Work in** menu for the fallback target.
-3. If prompted, open the privacy pane using Brian's settings button. Enable
-   **Brian** in **Accessibility** (named **Device Control and Data Access** on
-   newer macOS versions), then retry. macOS may require restarting Brian.
+The app bundles **Qwen3.5-4B MLX 4-bit language and vision weights**, Python, MLX-VLM, MCP, and native
+helpers (~3.6 GB). General planning uses the **base instruction model** without
+the narrow AX adapter. The `mac-ax-bootstrap-v0` LoRA adapter remains bundled
+and available through legacy research MCP tools, but it was trained on synthetic
+single-action Finder/TextEdit examples and is not a general planner.
 
-Brian's permission guide stays visible beside Settings. Drag the app icon into
-the Accessibility list, turn on its switch, then click **I’ve enabled it — retry**.
-The native drag shares the exact running `.app` URL, not a temporary copy.
+No API key, cloud model, listening server, external Python install, or runtime
+model download is needed. Local observations and conversation are not written
+to logs by Brian. Web search/open actions use the selected browser and transmit
+normal requests there. Email content in observations is treated as untrusted
+application data, not instructions.
 
-After rebuilding an ad-hoc-signed app, macOS can retain an enabled switch for
-the old signature while denying the new copy. Remove the stale **Brian** entry,
-then add the current `dist/Brian.app` with the **+** button and enable it again.
-Do not rebuild between granting access and testing that copy.
+## Build
 
-The model can read the selected app's open windows. This is app-level access,
-not file isolation. Start with a new, disposable document. Applied edits are
-not rolled back by Stop, and an interrupted text action can leave a partial edit.
+Checkout: `~/work-dev/use-brian/brian-computer-use`.
+Requires Apple Silicon and full Xcode/Swift 6+. The packaged research native
+helper targets **macOS 27.2**, so the full bundle advertises 27.2+. The Swift UI
+alone targets macOS 14+.
 
-For a small action:
-
-```text
-Press the "File" menu.
-```
-
-For a verifiable text task in the selected TextEdit document:
-
-```text
-Replace the entire contents of the editable text area with exactly this text: "Hello from Brian."
-```
-
-The exact-replacement form accepts a JSON string (use `\n` for line breaks).
-Brian pins it to the main document window and verifies exact text readback.
-Other tasks use app-wide context, including menus. The app does not claim an
-arbitrary task succeeded just because the policy returned `stop`.
-
-Existing launcher commands still work immediately without model inference:
-`Open Notes`, `Open github.com`, and `Search for coffee nearby`.
-
-## Develop and test
+First prepare `dist/mac-control` in the local `llm-research` checkout. Its virtual
+environment must contain the pinned dependencies and PyInstaller. Then:
 
 ```sh
-swift build
-swift test
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  bash scripts/build-app.sh --research-root /absolute/path/to/llm-research
 ```
 
-Tests require full Xcode with XCTest. If Command Line Tools is selected:
+This freezes Brian's planner alongside the existing research MCP tools without
+modifying the research checkout. No dependencies are downloaded. For repeated
+UI builds, reuse the already frozen planner:
+
+```sh
+bash scripts/build-app.sh --runtime-bundle "$PWD/dist/planner-runtime/mac-control"
+```
+
+The runtime must contain `resources/planner-version.json`; an old research-only
+runtime cannot handle natural-language planning. To rebuild just the runtime:
+
+```sh
+bash scripts/build-planner-runtime.sh /absolute/path/to/llm-research
+```
+
+Full builds include model licenses, weights/adapter hashes, and research
+provenance when `--research-root` is supplied. Weights, runtime binaries, and build
+outputs stay out of Git. Signing is ad hoc for local development; release signing
+and notarization are not configured.
+
+## Accessibility setup
+
+When control requires access, a guide stays visible beside System Settings.
+Click **Open Accessibility Settings**, drag the Brian icon into the list, enable
+its switch, then click **I’ve enabled it — retry**. This exports the actual app
+URL, not a temporary copy. New macOS versions name this pane **Device Control
+and Data Access**.
+
+Ad-hoc rebuilds can invalidate the saved grant even when the switch is on.
+Remove the stale Brian entry and add the final `.app` again. Do not rebuild after
+authorizing the copy you intend to use. Stop does not roll back actions; an
+interrupted text operation can leave a partial edit.
+
+## Test and architecture
 
 ```sh
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test
-```
-
-To run from source after `swift build`, point at the research runtime:
-
-```sh
-BRIAN_RUNTIME_BUNDLE=/absolute/path/to/llm-research/dist/mac-control swift run Brian
-```
-
-For a lightweight UI/CI build without proprietary/local model artifacts:
-
-```sh
+python3 -m unittest discover -s PlannerRuntime -p 'test_*.py'
 bash scripts/build-app.sh --shell-only
 ```
 
-A shell-only build displays a missing-runtime error for agent tasks; it never
-falls back to a cloud model. CI runs mock-backed loop and real-stdio transport
-tests, not inference or desktop-control tests against the local weights.
-
-Local validation on 2026-11-15: all 22 tests passed. The full bundled 0.2.0 app
-also completed a TextEdit replacement with `Brian final build: Café 新加坡.`;
-both Brian's fresh readback and an independent UI inspection confirmed the
-exact text. The companion displayed its happy **Done!** state. This validates
-one live text action, not general multi-step task reliability.
-
-The subsequent Mail/permission update passed 28 tests. A live search submitted
-through Brian opened Apple Mail's All Mailboxes results, retained the requested
-query, and verified Date + Newest Message on Top using Mail's menu state. The
-newest results were also inspected independently. The app's current access was
-refreshed after packaging. Native drag-to-Settings support is implemented; the
-cross-app drag itself has not been verified by the automation tool.
-
-## Architecture
+CI runs Swift orchestration/transport tests and Python schema-validation tests.
+These do not establish real model planning accuracy or every app's compatibility.
+A shell-only build has no inference runtime and never falls back to cloud.
 
 ```text
-SwiftUI command panel
-  ├─ launcher command → NSWorkspace
-  ├─ email search → Apple Mail Accessibility search + All Mailboxes + date sort
-  └─ agent task → AgentLoop
-       ├─ mac_status
-       ├─ mac_observe → current accessibility snapshot
-       ├─ mac_propose → local Qwen + LoRA + runtime rules
-       ├─ validate → mac_execute (single-use token; stale snapshot rejected)
-       └─ observe again → verify / continue / stop
+Input + in-memory conversation
+  → NaturalAgent
+  → local brian_plan (Qwen base instruction model)
+  → strict tool validation + optional confirmation
+  → DesktopController / Apple Mail search / NSWorkspace
+  → fresh accessibility observation → next action or reply
 ```
 
-- `Sources/BrianCore/AgentLoop.swift`: bounded orchestration and verification.
-- `Sources/BrianCore/MCPRuntime.swift`: async stdio MCP client, deadlines, cancellation.
-- `Sources/BrianRuntimeHost`: process-group isolation for model/native shutdown.
-- `Sources/BrianApp`: input, target app, progress, native launcher commands.
-- `Sources/BrianApp/MailSearchExecutor.swift`: bounded Mail search-control workflow.
-- `Sources/BrianApp/PermissionGuideView.swift`: persistent guide with draggable app icon.
-- `Tests/BrianCoreTests`: loop behavior and subprocess protocol tests.
-- `scripts/build-app.sh`: self-contained app packaging.
+- `PlannerRuntime`: inference prompt, schema validation, frozen-runtime entry.
+- `Sources/BrianCore/NaturalAgent.swift`: bounded planning loop and tool contracts.
+- `Sources/BrianApp/DesktopController.swift`: observed app controls and execution checks.
+- `Sources/BrianApp/MailSearchExecutor.swift`: verified Mail search/sort workflow.
+- `Sources/BrianCore/MCPRuntime.swift`: local stdio transport, timeout/cancellation.
+- `Sources/BrianApp/PermissionGuideView.swift`: native draggable app setup guide.
 
-No instructions, snapshots, or model outputs are persisted by Brian. The runtime
-holds bounded, expiring proposal/snapshot records in memory. Search commands
-still send the search query to Google through the default browser.
+## Validation on 2026-11-15
+
+44 Swift tests and 7 Python validation tests pass. Real local-model checks mapped
+varied email/app/document requests to tools, including a contextual follow-up
+(“What about invoices from them?” → a Draper invoice search). A live run of the
+previously rejected “search cathay emails for me” changed the visible Mail query
+and returned independently inspected Cathay/Cathay Pacific messages.
+
+General GUI reliability remains experimental: Calculator opened and accepted
+button actions, but the arithmetic workflow stalled and a Clear action left a
+pending operation despite the model claiming completion. A corrective run then
+stopped on a focus change. These checks do **not** establish reliable arbitrary
+task completion. Review the actual app result, especially for multi-step tasks.
+
+Local synthetic vision smoke checks use the actual bundled weights: an accessible
+Continue button chooses `press`; a custom canvas with no supported control chooses
+`vision_observe`; the separate grounding pass places a click inside the drawn
+Continue button. Run `scripts/smoke-local-model.py /path/to/model` with the research
+Python environment. `Tests/Fixtures/NavigationDemo.swift` provides a harmless native
+window with one accessible button and a custom canvas for manual end-to-end checks.
+These fixtures do not measure general visual grounding accuracy.
+
+The companion placement checks cover screen edges, negative display coordinates,
+and keeping the pet clear of the command bar and small action targets. Live
+vision-click delivery remains unverified: the latest native end-to-end runs
+stopped on focus changes. Synthetic grounding checks are not a substitute for
+successful native click delivery.

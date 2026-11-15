@@ -5,6 +5,12 @@ import Foundation
 public struct MailSearchRequest: Equatable, Sendable {
     public let query: String
 
+    public init(query: String) throws {
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, query.count <= 500,
+              query.unicodeScalars.allSatisfy({ $0.value >= 32 }) else { throw MailSearchError.invalidQuery }
+        self.query = query
+    }
+
     public static func parse(_ input: String) throws -> Self? {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.range(of: #"^(?:search the web|google|open|launch|go to)\b"#, options: [.regularExpression, .caseInsensitive]) != nil { return nil }
@@ -28,7 +34,7 @@ public struct MailSearchRequest: Equatable, Sendable {
                let range = Range(match.range(at: 1), in: body) {
                 let query = String(body[range]).trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !query.isEmpty else { throw MailSearchError.invalidQuery }
-                return Self(query: query)
+                return try Self(query: query)
             }
         }
         throw MailSearchError.invalidQuery

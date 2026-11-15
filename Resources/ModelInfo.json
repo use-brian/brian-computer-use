@@ -3,11 +3,13 @@
   "conversion": "mlx-community/Qwen3.5-4B-4bit",
   "revision": "0e7ffd5c629ef7719d4cbc04069232580bfa9d9c",
   "adapter": "mac-ax-bootstrap-v0",
-  "runtime": "MLX-LM 0.32.2 / mac-control MCP",
-  "input": "accessibility text",
+  "runtime": "MLX-VLM 0.7.12 / mac-control MCP",
+  "input": "Accessibility text first; single-window screenshots on fallback",
   "architecture": "arm64",
   "bundled_runtime_minimum_macos": "27.2",
-  "apps": ["Finder", "TextEdit"],
-  "scope": "Experimental next-action policy trained on synthetic examples; not a general task planner.",
-  "source": "llm-research/experiments/002-mac-accessibility"
+  "apps": "Installed macOS apps with accessible controls; dedicated Apple Mail search",
+  "scope": "Experimental local language and vision planner; fresh AX targets preferred, visual targets grounded separately and revalidated before dispatch. No unrestricted shell.",
+  "source": "llm-research/experiments/002-mac-accessibility",
+  "planner": "Base Qwen3.5-4B instruction model; no LoRA applied for general planning",
+  "adapter_usage": "Preserved for legacy Finder/TextEdit research MCP tools; not the default planner"
 }

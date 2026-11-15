@@ -14,7 +14,7 @@ enum BrianApp {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: CommandPanel!
     private var statusItem: NSStatusItem!
     private var shortcut: GlobalShortcut!
@@ -41,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             self?.panel.orderOut(nil)
         })
         model.onComplete = { [weak self] in self?.panel.orderOut(nil) }
+        model.onScreenRecordingNeeded = { [weak self] in self?.showPermissionGuide(vision: true) }
         model.onAccessibilityNeeded = { [weak self] in self?.showPermissionGuide() }
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -54,16 +55,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let showPet = NSMenuItem(title: "Show Brian companion", action: #selector(showCompanion), keyEquivalent: "")
         showPet.target = self
         menu.addItem(showPet)
-        let targetMenu = NSMenu()
-        for (index, title) in ["Finder", "TextEdit"].enumerated() {
-            let item = NSMenuItem(title: title, action: #selector(selectTarget(_:)), keyEquivalent: "")
-            item.tag = index
-            item.target = self
-            targetMenu.addItem(item)
-        }
-        let targetItem = NSMenuItem(title: "Work in", action: nil, keyEquivalent: "")
-        targetItem.submenu = targetMenu
-        menu.addItem(targetItem)
+        let newTask = NSMenuItem(title: "New conversation", action: #selector(newConversation), keyEquivalent: "")
+        newTask.target = self
+        menu.addItem(newTask)
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Brian", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
@@ -94,19 +88,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         model.focusToken = UUID()
+        companion?.runToBar(panel.frame)
     }
 
     @objc private func showCompanion() { companion.show() }
 
-    private func showPermissionGuide() {
-        if permissionPanel == nil {
+    private func showPermissionGuide(vision: Bool = false) {
+        permissionPanel?.close()
+        do {
             let guide = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 388, height: 330),
                                 styleMask: [.titled, .closable], backing: .buffered, defer: false)
             guide.title = "Allow Brian"
             guide.isReleasedWhenClosed = false
             guide.hidesOnDeactivate = false
             guide.level = .floating
-            guide.contentView = NSHostingView(rootView: PermissionGuideView { [weak self] in
+            guide.contentView = NSHostingView(rootView: PermissionGuideView(vision: vision) { [weak self] in
                 guard let self else { return }
                 permissionPanel?.orderOut(nil)
                 model.submit()
@@ -118,18 +114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    @objc private func selectTarget(_ sender: NSMenuItem) {
-        guard !model.isRunning else { return }
-        model.target = sender.tag == 0 ? .finder : .textEdit
-    }
-
-    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        if menuItem.action == #selector(selectTarget(_:)) {
-            menuItem.state = model.target == (menuItem.tag == 0 ? .finder : .textEdit) ? .on : .off
-            return !model.isRunning
-        }
-        return true
-    }
+    @objc private func newConversation() { model.newTask(); showPanel() }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         showPanel()

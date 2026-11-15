@@ -8,5 +8,7 @@ dist/
 *.xcuserstate
 xcuserdata/
 Runtime/
+.runtime-build/
+__pycache__/
 *.safetensors
 *.gguf

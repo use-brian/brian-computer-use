@@ -1,13 +1,16 @@
 import AppKit
 import SwiftUI
+import Combine
+import BrianCore
 
-enum BrianMood { case idle, working, happy, attention }
+enum BrianMood { case idle, working, running, happy, attention }
 
 /// The existing Use Brian pixel silhouette, drawn as native shapes so the eyes,
 /// feet and body can animate independently without altering the brand artwork.
 struct BrianAvatar: View {
     var mood: BrianMood = .idle
     var animated = true
+    var direction: CGFloat = 1
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -15,7 +18,13 @@ struct BrianAvatar: View {
             let time = animated && !reduceMotion ? timeline.date.timeIntervalSinceReferenceDate : 0
             Canvas { context, size in
                 let cell = min(size.width / 9, size.height / 8)
-                let bounce = time == 0 ? 0 : sin(time * (mood == .working ? 7 : 2.4)) * (mood == .working ? 3.2 : 1.8)
+                let moving = mood == .running
+                let bounce = time == 0 ? 0 : sin(time * (moving ? 22 : mood == .working ? 7 : 2.4)) * (moving ? cell * 0.18 : mood == .working ? 3.2 : 1.8)
+                if moving {
+                    context.translateBy(x: size.width/2, y: size.height/2)
+                    context.rotate(by: .degrees(Double(direction) * 8))
+                    context.translateBy(x: -size.width/2, y: -size.height/2)
+                }
                 let origin = CGPoint(x: (size.width - cell * 7) / 2, y: cell * 0.7 + bounce)
                 let cyan = Color(red: 0, green: 0.83, blue: 0.92)
                 let ink = Color(red: 0.025, green: 0.14, blue: 0.20)
@@ -32,7 +41,7 @@ struct BrianAvatar: View {
                     }
                 }
                 for column in [2, 4] {
-                    let kick = mood == .working && time != 0 ? sin(time * 7 + Double(column)) * 2.5 : 0
+                    let kick = time == 0 ? 0 : moving ? sin(time * 22 + (column == 2 ? 0 : .pi)) * cell * 0.38 : mood == .working ? sin(time * 7 + Double(column)) * 2.5 : 0
                     context.fill(Path(CGRect(x: origin.x + Double(column) * cell,
                                              y: origin.y + 5 * cell + kick, width: cell - 0.5, height: cell - 0.5)),
                                  with: .color(cyan))
@@ -40,7 +49,7 @@ struct BrianAvatar: View {
                 let blink = time != 0 && time.truncatingRemainder(dividingBy: 4.5) < 0.16
                 for column in [2, 4] {
                     let eyeHeight = blink || mood == .happy ? cell * 0.12 : cell * 0.46
-                    let eye = CGRect(x: origin.x + Double(column) * cell + cell * 0.27,
+                    let eye = CGRect(x: origin.x + Double(column) * cell + cell * (moving ? 0.27 + direction * 0.1 : 0.27),
                                      y: origin.y + cell * 2.28, width: cell * 0.46, height: eyeHeight)
                     context.fill(Path(eye), with: .color(ink))
                 }
@@ -57,35 +66,45 @@ struct BrianAvatar: View {
     }
 }
 
+@MainActor final class CompanionMotion: ObservableObject {
+    @Published var compact = false
+    @Published var moving = false
+    @Published var direction: CGFloat = 1
+}
+
 struct CompanionView: View {
     @ObservedObject var model: CommandModel
+    @ObservedObject var motion: CompanionMotion
+    let willInteract: () -> Void
     let open: () -> Void
-    let didMove: () -> Void
+    let didMove: (Bool) -> Void
     let hide: () -> Void
     @State private var hovering = false
 
     private var mood: BrianMood {
-        model.isRunning ? .working : model.hasError ? .attention : model.isVerified ? .happy : .idle
+        model.isRunning ? .working : model.hasError ? .attention : model.isFinished ? .happy : .idle
     }
     private var label: String {
-        model.isRunning ? "Working…" : model.hasError ? "Needs you" : model.isVerified ? "Done!" : "Hey, I’m Brian"
+        model.isRunning ? (model.status.hasPrefix("Looking") || model.status.hasPrefix("Using vision") ? "Looking…" : model.status.hasPrefix("Understanding") ? "Thinking…" : "Working…") : model.hasError ? "Needs you" : model.isFinished ? "Done!" : "Hey, I’m Brian"
     }
     private var interaction: CompanionInteraction {
         let stopAction: (() -> Void)? = model.isRunning ? { model.stop() } : nil
-        return CompanionInteraction(label: label, open: open, stop: stopAction,
+        return CompanionInteraction(label: label, willInteract: willInteract, open: open, stop: stopAction,
             hide: hide, didMove: didMove, hover: { hovering = $0 })
     }
     var body: some View {
         VStack(spacing: 0) {
-            Text(label)
+            if !motion.compact { Text(motion.moving ? "On my way…" : label)
                 .font(.system(size: 11, weight: .medium, design: .rounded))
                 .foregroundStyle(.primary)
                 .padding(.horizontal, 10).padding(.vertical, 5)
                 .background(.regularMaterial, in: Capsule())
-                .opacity(hovering || model.isRunning || model.hasError || model.isVerified ? 1 : 0)
-            BrianAvatar(mood: mood).frame(width: 122, height: 110)
+                .opacity(hovering || motion.moving || model.isRunning || model.hasError || model.isFinished ? 1 : 0)
+            }
+            BrianAvatar(mood: motion.moving ? .running : mood, direction: motion.direction)
+                .frame(width: motion.compact ? 54 : 122, height: motion.compact ? 54 : 110)
         }
-        .frame(width: 146, height: 138)
+        .frame(width: motion.compact ? 64 : 146, height: motion.compact ? 64 : 138)
         .overlay { interaction }
     }
 }
@@ -94,15 +113,17 @@ struct CompanionView: View {
 /// translation. Pointer and window origins are captured once in screen space.
 private struct CompanionInteraction: NSViewRepresentable {
     let label: String
+    let willInteract: () -> Void
     let open: () -> Void
     let stop: (() -> Void)?
     let hide: () -> Void
-    let didMove: () -> Void
+    let didMove: (Bool) -> Void
     let hover: (Bool) -> Void
 
     func makeNSView(context: Context) -> CompanionInputView { CompanionInputView() }
 
     func updateNSView(_ view: CompanionInputView, context: Context) {
+        view.willInteract = willInteract
         view.open = open
         view.stop = stop
         view.hide = hide
@@ -117,10 +138,11 @@ private struct CompanionInteraction: NSViewRepresentable {
 }
 
 private final class CompanionInputView: NSView {
+    var willInteract: () -> Void = {}
     var open: () -> Void = {}
     var stop: (() -> Void)?
     var hide: () -> Void = {}
-    var didMove: () -> Void = {}
+    var didMove: (Bool) -> Void = { _ in }
     var hover: (Bool) -> Void = { _ in }
     private var pointerOrigin: CGPoint?
     private var windowOrigin = CGPoint.zero
@@ -145,6 +167,7 @@ private final class CompanionInputView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         guard let window else { return }
+        willInteract()
         pointerOrigin = NSEvent.mouseLocation
         windowOrigin = window.frame.origin
         dragging = false
@@ -169,11 +192,13 @@ private final class CompanionInputView: NSView {
         pointerOrigin = nil
         dragging = false
         NSCursor.openHand.set()
-        if wasDragging { didMove() }
-        else { open() }
+        didMove(wasDragging)
+        if !wasDragging { open() }
     }
 
     override func rightMouseDown(with event: NSEvent) {
+        willInteract()
+        defer { didMove(false) }
         let menu = NSMenu()
         let openItem = menu.addItem(withTitle: "Open Brian", action: #selector(openBrian), keyEquivalent: "")
         openItem.target = self
@@ -195,42 +220,129 @@ private final class CompanionInputView: NSView {
 @MainActor
 final class CompanionController {
     private let panel: NSPanel
+    private let model: CommandModel
+    private let motion = CompanionMotion()
+    private var subscriptions = Set<AnyCancellable>()
+    private var movement: Task<Void, Never>?
+    private var movementID = UUID()
+    private var bar: CGRect?
+    private var hiddenByUser = false
+    private var manualUntil = Date.distantPast
+    private var interacting = false
+    private let normalSize = CGSize(width: 146, height: 138)
+    private let cursorSize = CGSize(width: 64, height: 64)
 
     init(model: CommandModel, open: @escaping () -> Void) {
+        self.model = model
         panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 146, height: 138),
                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.title = "Brian companion"
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = false
-        panel.level = .floating
-        panel.hidesOnDeactivate = false
+        panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = false
+        panel.level = .floating; panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isReleasedWhenClosed = false
-        panel.contentView = NSHostingView(rootView: CompanionView(model: model, open: open,
-            didMove: { [weak self] in self?.finishMove() },
-            hide: { [weak self] in self?.panel.orderOut(nil) }))
+        panel.contentView = NSHostingView(rootView: CompanionView(model: model, motion: motion,
+            willInteract: { [weak self] in self?.beginInteraction() }, open: open,
+            didMove: { [weak self] dragged in self?.finishMove(dragged: dragged) }, hide: { [weak self] in self?.hide() }))
+        model.$activityTarget.compactMap { $0 }.sink { [weak self] rect in
+            Task { @MainActor in self?.follow(rect) }
+        }.store(in: &subscriptions)
+        model.$isRunning.removeDuplicates().dropFirst().sink { [weak self] running in
+            Task { @MainActor in self?.workChanged(running) }
+        }.store(in: &subscriptions)
     }
 
     func show() {
+        movement?.cancel(); movementID = UUID(); motion.moving = false
+        hiddenByUser = false
         guard let screen = NSScreen.main?.visibleFrame else { return }
         let saved = UserDefaults.standard.array(forKey: "companionPosition") as? [Double]
-        let position = saved?.count == 2 ? CGPoint(x: saved![0], y: saved![1])
-            : CGPoint(x: screen.maxX - 166, y: screen.minY + 50)
-        let targetScreen = NSScreen.screens.first { $0.visibleFrame.contains(position) }?.visibleFrame ?? screen
-        panel.setFrameOrigin(clamp(position, to: targetScreen))
+        let point = saved?.count == 2 ? CGPoint(x: saved![0], y: saved![1]) : CGPoint(x: screen.maxX-166, y: screen.minY+50)
+        let targetScreen = NSScreen.screens.first { $0.visibleFrame.contains(point) }?.visibleFrame ?? screen
+        motion.compact = model.isRunning
+        panel.setFrame(CompanionPlacement.clamp(CGRect(origin: point, size: model.isRunning ? cursorSize : normalSize), to: targetScreen), display: true)
         panel.orderFrontRegardless()
     }
 
-    private func finishMove() {
-        let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) }?.visibleFrame
-            ?? NSScreen.main?.visibleFrame
-        if let screen { panel.setFrameOrigin(clamp(panel.frame.origin, to: screen)) }
-        UserDefaults.standard.set([panel.frame.minX, panel.frame.minY], forKey: "companionPosition")
+    func runToBar(_ frame: CGRect) {
+        bar = frame
+        guard !hiddenByUser else { return }
+        manualUntil = .distantPast
+        let size = model.isRunning ? cursorSize : normalSize
+        motion.compact = model.isRunning
+        move(to: CompanionPlacement.byBar(frame, size: size, screen: screen(for: frame)))
     }
 
-    private func clamp(_ point: CGPoint, to screen: CGRect) -> CGPoint {
-        CGPoint(x: min(max(point.x, screen.minX), max(screen.minX, screen.maxX - panel.frame.width)),
-                y: min(max(point.y, screen.minY), max(screen.minY, screen.maxY - panel.frame.height)))
+    private func follow(_ target: CGRect) {
+        guard model.isRunning, !hiddenByUser, !interacting, Date() >= manualUntil else { return }
+        motion.compact = true
+        move(to: CompanionPlacement.beside(target, size: cursorSize, screen: screen(for: target)))
     }
+
+    private func workChanged(_ running: Bool) {
+        guard !hiddenByUser, !interacting else { return }
+        if running {
+            motion.compact = true
+            if let target = model.activityTarget { follow(target) }
+            else { move(to: CGRect(x: panel.frame.midX-32, y: panel.frame.midY-32, width: 64, height: 64)) }
+        } else {
+            motion.compact = false
+            if let bar { runToBar(bar) }
+            else { move(to: CompanionPlacement.clamp(CGRect(origin: panel.frame.origin, size: normalSize), to: screen(for: panel.frame))) }
+        }
+    }
+
+    private func move(to destination: CGRect) {
+        movement?.cancel()
+        let id = UUID(); movementID = id
+        let start = panel.frame
+        let distance = hypot(destination.midX-start.midX, destination.midY-start.midY)
+        motion.direction = destination.midX >= start.midX ? 1 : -1
+        panel.orderFrontRegardless()
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, distance > 3 || start.size != destination.size else {
+            panel.setFrame(destination, display: true); motion.moving = false; return
+        }
+        motion.moving = true
+        let duration = motion.compact ? min(0.30, max(0.15, distance/2400)) : min(0.85, max(0.2, distance/950))
+        movement = Task { [weak self] in
+            let began = Date()
+            while !Task.isCancelled {
+                guard let self, movementID == id else { return }
+                let t = min(1, Date().timeIntervalSince(began)/duration)
+                let ease = t*t*(3-2*t)
+                panel.setFrame(CGRect(x: start.minX+(destination.minX-start.minX)*ease,
+                    y: start.minY+(destination.minY-start.minY)*ease,
+                    width: start.width+(destination.width-start.width)*ease,
+                    height: start.height+(destination.height-start.height)*ease), display: true)
+                if t >= 1 { motion.moving = false; return }
+                try? await Task.sleep(for: .milliseconds(16))
+            }
+        }
+    }
+
+    private func screen(for frame: CGRect) -> CGRect {
+        NSScreen.screens.max { a, b in
+            let x = a.visibleFrame.intersection(frame), y = b.visibleFrame.intersection(frame)
+            return (x.isNull ? 0 : x.width*x.height) < (y.isNull ? 0 : y.width*y.height)
+        }?.visibleFrame ?? frame
+    }
+    private func beginInteraction() {
+        movement?.cancel(); movementID = UUID(); motion.moving = false
+        interacting = true
+        manualUntil = Date().addingTimeInterval(2)
+    }
+    private func finishMove(dragged: Bool) {
+        interacting = false
+        manualUntil = Date().addingTimeInterval(2)
+        if motion.compact && !model.isRunning {
+            motion.compact = false
+            panel.setFrame(CompanionPlacement.clamp(CGRect(origin: panel.frame.origin, size: normalSize), to: screen(for: panel.frame)), display: true)
+        }
+        guard dragged else { return }
+        let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) }?.visibleFrame ?? screen(for: panel.frame)
+        panel.setFrame(CompanionPlacement.clamp(panel.frame, to: screen), display: true)
+        UserDefaults.standard.set([panel.frame.minX, panel.frame.minY], forKey: "companionPosition")
+        manualUntil = Date().addingTimeInterval(2)
+    }
+    private func hide() { hiddenByUser = true; movement?.cancel(); panel.orderOut(nil) }
 }

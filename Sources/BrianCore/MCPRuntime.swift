@@ -2,7 +2,7 @@ import Foundation
 import Darwin
 
 /// Local MCP transport. All requests stay on stdio; no port or cloud API is used.
-public actor MCPRuntime: AgentBackend {
+public actor MCPRuntime: AgentBackend, LanguagePlanner {
     private let executable: URL
     private let host: URL
     private let timeout: Duration
@@ -25,6 +25,10 @@ public actor MCPRuntime: AgentBackend {
 
     public func status() async throws -> RuntimeStatus {
         try await tool("mac_status").decoded(RuntimeStatus.self)
+    }
+
+    public func plan(task: String, context: JSONValue) async throws -> PlannerAction {
+        try await tool("brian_plan", ["task": .string(task), "context": context]).decoded(PlannerAction.self)
     }
 
     public func observe(app: AgentApp) async throws -> Observation {

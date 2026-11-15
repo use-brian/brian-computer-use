@@ -14,13 +14,14 @@ while [ "$#" -gt 0 ]; do
 done
 if [ "$shell_only" = false ]; then
   if [ -z "$runtime_bundle" ] && [ -n "$research_root" ]; then
-    runtime_bundle="$research_root/dist/mac-control"
+    bash scripts/build-planner-runtime.sh "$research_root"
+    runtime_bundle="$PWD/dist/planner-runtime/mac-control"
   fi
   if [ -z "$runtime_bundle" ]; then
     printf 'Pass --research-root /path/to/llm-research or --runtime-bundle /path/to/mac-control. Use --shell-only for UI/CI builds.\n' >&2
     exit 2
   fi
-  for resource in mac-control _internal resources/build/mac-ax resources/configs/decision-weights.json \
+  for resource in mac-control _internal resources/planner-version.json resources/build/mac-ax resources/configs/decision-weights.json \
     resources/models/qwen3.5-4b-4bit/model.safetensors resources/models/qwen3.5-4b-4bit/tokenizer.json \
     resources/adapters/mac-ax-bootstrap-v0/adapters.safetensors resources/adapters/mac-ax-bootstrap-v0/adapter_config.json; do
     test -e "$runtime_bundle/$resource" || { printf 'Missing runtime resource: %s\n' "$resource" >&2; exit 2; }

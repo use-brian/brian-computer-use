@@ -94,7 +94,7 @@ public protocol AgentBackend: Sendable {
 }
 
 public enum AgentError: LocalizedError, Equatable {
-    case missingRuntime, missingModel, accessibility, invalidAction, invalidTask
+    case missingRuntime, missingModel, accessibility, screenRecording, invalidAction, invalidTask
     case changedApp, ambiguousWindow, lostWindow, truncated
     case runtime(String)
 
@@ -102,6 +102,7 @@ public enum AgentError: LocalizedError, Equatable {
         switch self {
         case .missingRuntime: "The local model runtime is missing. Build Brian with the llm-research bundle."
         case .missingModel: "The bundled base model or trained adapter is missing. Rebuild the full app."
+        case .screenRecording: "Allow Brian in Screen & System Audio Recording settings to use vision, then retry. Accessibility remains the first choice."
         case .accessibility: "Allow Brian in System Settings → Privacy & Security → Accessibility, then retry."
         case .invalidAction: "The model proposed an unsupported action. No further action was taken."
         case .invalidTask: "Enter an instruction of 1–12,000 characters."

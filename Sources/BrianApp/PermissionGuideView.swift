@@ -2,19 +2,20 @@ import AppKit
 import SwiftUI
 
 struct PermissionGuideView: View {
+    var vision = false
     let retry: () -> Void
 
     var body: some View {
         VStack(spacing: 14) {
-            Text("Let Brian use your Mac").font(.title3.bold())
-            Text("Drag this app into the Accessibility list, then turn on its switch.")
+            Text(vision ? "Let Brian see this window" : "Let Brian use your Mac").font(.title3.bold())
+            Text(vision ? "Accessibility could not reach the needed control. Allow Screen & System Audio Recording for local, single-window screenshots. Brian does not capture audio or save these images." : "Drag this app into the Accessibility list, then turn on its switch.")
                 .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
             PermissionAppIcon().frame(width: 72, height: 72)
                 .help("Drag Brian into System Settings")
             Text("Drag Brian ↑").font(.caption).foregroundStyle(.secondary)
-            Button("Open Accessibility Settings") {
-                NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+            Button(vision ? "Open Screen Recording Settings" : "Open Accessibility Settings") {
+                NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?" + (vision ? "Privacy_ScreenCapture" : "Privacy_Accessibility"))!)
             }
             Text("Already listed but still blocked? Remove the old Brian entry first, then drag this copy in.")
                 .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
