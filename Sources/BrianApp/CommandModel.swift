@@ -104,7 +104,7 @@ final class CommandModel: ObservableObject {
     }
     func newTask() {
         guard !isRunning else { return }
-        conversation = []; instruction = ""; status = ""; hasResponse = false; hasError = false; isFinished = false
+        conversation = []; foregroundApp = nil; instruction = ""; status = ""; hasResponse = false; hasError = false; isFinished = false
     }
     func shutdown() async {
         task?.cancel(); resolveApproval(false)

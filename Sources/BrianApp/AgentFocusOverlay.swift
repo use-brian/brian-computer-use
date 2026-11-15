@@ -22,13 +22,11 @@ import AppKit
         let screen = NSScreen.screens.max { a, b in
             a.frame.intersection(appKitRect).area < b.frame.intersection(appKitRect).area
         } ?? primary
-        let union = appKitRect.insetBy(dx: -8, dy: -8)
-            .union(NSRect(x: appKitRect.minX - 8, y: appKitRect.maxY + 4, width: 290, height: 30))
-        let frame = union.intersection(screen.frame)
+        let frame = appKitRect.insetBy(dx: -5, dy: -5).intersection(screen.frame)
         guard !frame.isEmpty else { hide(); return }
         panel.setFrame(frame, display: false)
         drawing.target = appKitRect.offsetBy(dx: -frame.minX, dy: -frame.minY)
-        drawing.label = String(label.prefix(52)); drawing.cursor = cursor; drawing.vision = vision
+        drawing.cursor = cursor; drawing.vision = vision
         drawing.needsDisplay = true
         panel.orderFrontRegardless()
     }
@@ -37,28 +35,20 @@ import AppKit
 private extension CGRect { var area: CGFloat { isNull ? 0 : width * height } }
 @MainActor private final class FocusDrawing: NSView {
     var target = CGRect.zero
-    var label = ""
     var cursor = false
     var vision = false
     override func draw(_ dirtyRect: NSRect) {
         let color: NSColor = vision ? .systemOrange : .systemTeal
-        color.withAlphaComponent(0.07).setFill()
-        let outline = NSBezierPath(roundedRect: target.insetBy(dx: -3, dy: -3), xRadius: 7, yRadius: 7)
-        outline.fill(); color.withAlphaComponent(0.9).setStroke(); outline.lineWidth = 2; outline.stroke()
+        // The pet and command bar carry status. Keep the target itself unobscured.
+        let outline = NSBezierPath(roundedRect: target.insetBy(dx: -2, dy: -2), xRadius: 6, yRadius: 6)
+        color.withAlphaComponent(cursor ? 0.45 : 0.22).setStroke()
+        outline.lineWidth = 1
+        outline.stroke()
         if cursor {
-            let point = CGPoint(x: target.midX, y: target.midY)
-            let ring = NSBezierPath(ovalIn: CGRect(x: point.x - 12, y: point.y - 12, width: 24, height: 24))
-            NSColor.white.withAlphaComponent(0.95).setFill(); ring.fill(); color.setStroke(); ring.lineWidth = 3; ring.stroke()
-            color.setFill(); NSBezierPath(ovalIn: CGRect(x: point.x - 3, y: point.y - 3, width: 6, height: 6)).fill()
+            let ring = NSBezierPath(ovalIn: CGRect(x: target.midX - 5, y: target.midY - 5, width: 10, height: 10))
+            color.withAlphaComponent(0.55).setStroke()
+            ring.lineWidth = 1
+            ring.stroke()
         }
-        let text = (vision ? "Vision · " : "Accessibility · ") + label
-        let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: NSColor.white]
-        let size = (text as NSString).size(withAttributes: attrs)
-        let width = min(bounds.width, size.width + 20)
-        let bubble = CGRect(x: max(0, min(target.minX - 3, bounds.width - width)),
-                            y: max(0, min(target.maxY + 7, bounds.height - 26)), width: width, height: 26)
-        NSColor.black.withAlphaComponent(0.82).setFill()
-        NSBezierPath(roundedRect: bubble, xRadius: 8, yRadius: 8).fill()
-        (text as NSString).draw(in: bubble.insetBy(dx: 10, dy: 5), withAttributes: attrs)
     }
 }

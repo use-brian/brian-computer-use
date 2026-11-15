@@ -47,3 +47,28 @@ multi = {'objective':'Create a document and export it as PDF', 'criteria':['The 
 review = p.assess('Create a document saying Hello and export it as a PDF.',
                   context('Hello', 'Created the document and exported the PDF.', multi, 'TextEdit', 'Untitled'))
 print('Partial multi-step review:', review, flush=True); assert not review['complete']
+
+# A prior developer test must not supply facts or app routing for a real request.
+real_task = 'Find my real flight departing tomorrow in my emails and tell me the flight number and departure time.'
+fixture = context('Booking confirmation. ExampleAir QX200. Departure 16 November 2026 at 14:20. This is synthetic test data.',
+                  'Your flight tomorrow is ExampleAir QX200 at 14:20.',
+                  {'objective':real_task,'criteria':[real_task]}, 'Brian Workflow Test', 'Brian Workflow Test')
+fixture['conversation'] = [{'role':'user','content':'In Brian Workflow Test, identify tomorrow’s booking.'},
+                           {'role':'assistant','content':'ExampleAir QX200 at 14:20.'}]
+review = p.assess(real_task, fixture)
+print('Synthetic data rejected for real request:', review, flush=True); assert not review['complete']
+fixture['observation'] = {'app':'','name':'','window':'Developer test fixture unavailable in normal use','elements':[]}
+fixture['installed_applications'] = [{'id':'com.apple.mail','name':'Mail'}]
+fixture['history'] = []
+fixture['evidence'] = []
+action = p.predict(real_task, fixture)
+print('Real email request after test conversation:', action, flush=True)
+assert action['kind'] == 'search_mail'
+assert 'tomorrow' not in action['value'].lower()
+
+# Preserve natural phrasing: relative event dates are conditions, not literal terms.
+action = p.predict('can you help me search for flights tomorrow at email',
+                   dict(clock, installed_applications=[{'id':'com.apple.mail','name':'Mail'}],
+                        observation={'app':'com.apple.mail','name':'Mail','window':'Inbox','elements':[]}, history=[]))
+print('Natural flight request uses Mail without a literal relative-date word:', action, flush=True)
+assert action['kind'] == 'search_mail' and 'tomorrow' not in action['value'].lower()

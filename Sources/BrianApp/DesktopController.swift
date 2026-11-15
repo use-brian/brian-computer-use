@@ -11,7 +11,7 @@ final class DesktopController: DesktopTools {
     private var pendingSnapshot: VisualSnapshot?
     private var inspectionRoot: (pid: pid_t, node: AXUIElement)?
     func finish() { overlay.hide(); vision.clear(); pendingSnapshot = nil; confirmationPreview = nil; inspectionRoot = nil }
-    let applications: [DesktopApplication]
+    private(set) var applications: [DesktopApplication] = []
     private var applicationURLs: [String: URL] = [:]
     private var references: [String: AXUIElement] = [:]
     private var lastObservation: DesktopObservation?
@@ -20,15 +20,26 @@ final class DesktopController: DesktopTools {
     private var observedForeground: pid_t?
     private let protectedApps: Set<String> = ["com.apple.Terminal", "com.googlecode.iterm2", "com.apple.ScriptEditor2", "com.apple.systempreferences", "com.apple.keychainaccess"]
 
+    private func allowsApp(_ id: String, url: URL? = nil) -> Bool {
+        let bundle = url.flatMap { Bundle(url: $0) }
+        let marked = bundle?.object(forInfoDictionaryKey: "BrianTestFixture") as? Bool ?? false
+        #if DEBUG
+        let optIn = ProcessInfo.processInfo.environment["BRIAN_ENABLE_TEST_FIXTURES"] == "1"
+        #else
+        let optIn = false
+        #endif
+        return DesktopAppPolicy.allows(bundleID: id, markedAsTestFixture: marked, allowTestFixtures: optIn)
+    }
+
     init() {
         var apps: [String: String] = [:]
         var urls: [String: URL] = [:]
         for running in NSWorkspace.shared.runningApplications where running.activationPolicy == .regular {
-            if let id = running.bundleIdentifier { apps[id] = running.localizedName ?? id; urls[id] = running.bundleURL }
+            if let id = running.bundleIdentifier, allowsApp(id, url: running.bundleURL) { apps[id] = running.localizedName ?? id; urls[id] = running.bundleURL }
         }
         for root in ["/Applications", "/System/Applications", "/System/Applications/Utilities", NSHomeDirectory() + "/Applications"] {
             for url in (try? FileManager.default.contentsOfDirectory(at: URL(fileURLWithPath: root), includingPropertiesForKeys: nil)) ?? [] where url.pathExtension == "app" {
-                if let bundle = Bundle(url: url), let id = bundle.bundleIdentifier {
+                if let bundle = Bundle(url: url), let id = bundle.bundleIdentifier, allowsApp(id, url: url) {
                     urls[id] = url
                     apps[id] = (bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
                         ?? url.deletingPathExtension().lastPathComponent
@@ -55,21 +66,21 @@ final class DesktopController: DesktopTools {
         let identifier = running?.bundleIdentifier ?? app ?? ""
         let name = running?.localizedName ?? ""
         let trusted = AXIsProcessTrusted()
-        guard trusted, let running, !protectedApps.contains(identifier) else {
-            let result = DesktopObservation(app: identifier, name: name, window: protectedApps.contains(identifier) ? "Manual control required for this app" : "", accessibility: trusted, truncated: false, elements: [])
+        guard trusted, let running, !protectedApps.contains(identifier), allowsApp(identifier, url: running.bundleURL) else {
+            let result = DesktopObservation(app: identifier, name: name, window: !allowsApp(identifier, url: running?.bundleURL) ? "Developer test fixture unavailable in normal use" : protectedApps.contains(identifier) ? "Manual control required for this app" : "", accessibility: trusted, truncated: false, elements: [])
             lastObservation = result
             return result
         }
         let root = AXUIElementCreateApplication(running.processIdentifier)
         AXUIElementSetMessagingTimeout(root, 0.5)
         var rows: [DesktopElement] = []
-        var visited = Set<CFHashCode>()
+        var visited = Set<AXUIElement>()
         var truncated = false
         var characters = 0
         var nodes = 0
         func walk(_ node: AXUIElement, depth: Int, menuPath: String = "") {
             guard depth <= 18, rows.count < 160, characters < 26000, nodes < 700 else { truncated = true; return }
-            guard visited.insert(CFHash(node)).inserted else { return }
+            guard visited.insert(node).inserted else { return }
             nodes += 1
             let role = string(node, kAXRoleAttribute)
             let subrole = string(node, kAXSubroleAttribute)
@@ -113,19 +124,23 @@ final class DesktopController: DesktopTools {
             // Read document/message content before large sidebars and result lists
             // consume the observation budget. This is role-based, not Mail-specific.
             var contentNodes = 0
+            var resultLists: [AXUIElement] = []
             func contentRoots(_ node: AXUIElement, depth: Int) {
                 guard depth < 18, contentNodes < 500 else { return }
                 contentNodes += 1
                 let role = string(node, kAXRoleAttribute)
                 if string(node, kAXSubroleAttribute) == "AXSecureTextField" { return }
                 if ["AXWebArea", kAXTextAreaRole].contains(role) { walk(node, depth: 0); return }
-                if [kAXTableRole, kAXOutlineRole, kAXMenuBarRole].contains(role) { return }
+                if role == kAXTableRole { resultLists.append(node); return }
+                if [kAXOutlineRole, kAXMenuBarRole].contains(role) { return }
                 for child in (attribute(node, kAXChildrenAttribute) as? [AXUIElement] ?? []).prefix(80) {
                     contentRoots(child, depth: depth + 1)
                 }
             }
             contentRoots(window, depth: 0)
             if let focused = element(root, kAXFocusedUIElementAttribute) { walk(focused, depth: 0) }
+            // Result tables precede mailbox/navigation sidebars in the bounded snapshot.
+            for list in resultLists { walk(list, depth: 0) }
             walk(window, depth: 0)
             overlay.show(rect: frame(window), label: "Reading \(name)", vision: snapshot != nil)
         } else { overlay.hide() }
@@ -167,7 +182,7 @@ final class DesktopController: DesktopTools {
         if !action.kind.hasPrefix("vision_") { vision.clear() }
         switch action.kind {
         case "open_app":
-            guard let id = action.app else { throw AgentError.invalidAction }
+            guard let id = action.app, allowsApp(id, url: applicationURLs[id]) else { throw AgentError.invalidAction }
             if let running = NSRunningApplication.runningApplications(withBundleIdentifier: id).first {
                 running.activate(options: [])
                 try await Task.sleep(for: .milliseconds(300))
@@ -201,7 +216,8 @@ final class DesktopController: DesktopTools {
         guard AXIsProcessTrusted() else { throw AgentError.accessibility }
         guard !protectedApps.contains(observation.app), observation.app != Bundle.main.bundleIdentifier,
               observation == lastObservation, let pid = processID,
-              let app = NSRunningApplication(processIdentifier: pid), app.bundleIdentifier == observation.app else {
+              let app = NSRunningApplication(processIdentifier: pid), app.bundleIdentifier == observation.app,
+              allowsApp(observation.app, url: app.bundleURL) else {
             throw failure("This app needs manual control, or the observed app changed. No action was taken.")
         }
         let foreground = NSWorkspace.shared.frontmostApplication
@@ -309,12 +325,29 @@ final class DesktopController: DesktopTools {
             guard selectable.boolValue else {
                 throw DesktopRecoveryError.accessibilityUnavailable("This item no longer supports accessible selection. No selection was dispatched.")
             }
-            guard AXUIElementSetAttributeValue(node, kAXSelectedAttribute as CFString, kCFBooleanTrue) == .success else {
-                throw failure("The item could not be selected. Review the app before retrying.")
+            // Tables such as Mail expose row setters that don't notify their
+            // selection controller. Prefer the owning table's selected-rows API.
+            var parent = element(node, kAXParentAttribute)
+            var selectionOwner: AXUIElement?
+            for _ in 0..<6 {
+                guard let candidate = parent else { break }
+                var writable = DarwinBoolean(false)
+                AXUIElementIsAttributeSettable(candidate, kAXSelectedRowsAttribute as CFString, &writable)
+                if writable.boolValue { selectionOwner = candidate; break }
+                parent = element(candidate, kAXParentAttribute)
             }
-            _ = AXUIElementSetAttributeValue(node, kAXFocusedAttribute as CFString, kCFBooleanTrue)
-            try await Task.sleep(for: .milliseconds(350))
-            guard attribute(node, kAXSelectedAttribute) as? Bool == true else { throw failure("Selection did not match the requested item. Review the app.") }
+            let result: AXError
+            if let selectionOwner, prior.role == kAXRowRole {
+                result = AXUIElementSetAttributeValue(selectionOwner, kAXSelectedRowsAttribute as CFString, [node] as CFArray)
+            } else {
+                result = AXUIElementSetAttributeValue(node, kAXSelectedAttribute as CFString, kCFBooleanTrue)
+            }
+            guard result == .success else { throw failure("The item could not be selected. Review the app before retrying.") }
+            try await Task.sleep(for: .milliseconds(500))
+            let selectedRows = selectionOwner.flatMap { attribute($0, kAXSelectedRowsAttribute) as? [AXUIElement] } ?? []
+            guard attribute(node, kAXSelectedAttribute) as? Bool == true || selectedRows.contains(where: { CFEqual($0, node) }) else {
+                throw failure("Selection did not match the requested item. Review the app.")
+            }
         case "press":
             var names: CFArray?
             AXUIElementCopyActionNames(node, &names)

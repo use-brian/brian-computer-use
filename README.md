@@ -190,7 +190,7 @@ Input + in-memory conversation
 
 ## Validation on 2026-11-15
 
-50 Swift tests and 15 Python validation tests pass. Real local-model checks mapped
+52 Swift tests and 15 Python validation tests pass. Real local-model checks mapped
 varied email/app/document requests to tools, including a contextual follow-up
 (“What about invoices from them?” → a Draper invoice search). A live run of the
 previously rejected “search cathay emails for me” changed the visible Mail query
@@ -245,3 +245,26 @@ continued to the second (departure 16 Nov), and returned QX200 at 14:20 for the
 An earlier run exposed repeated premature completion; the verifier rejected it,
 and the final planner now requires a recovery action before proposing completion
 again. This is one controlled workflow, not a general reliability benchmark.
+
+### Test isolation and quiet focus (0.5.1)
+
+Release builds exclude Brian's workflow/navigation fixtures from app discovery,
+observation, and control, including fixtures marked `BrianTestFixture = true` in
+Info.plist. For development only, a **debug** build can opt in with
+`BRIAN_ENABLE_TEST_FIXTURES=1`. Never leave a fixture session in the user-facing
+app: quit the debug app, close/remove temporary fixture bundles, and relaunch
+normal Brian with a fresh conversation after a test. New conversation also
+clears the remembered target app. Earlier assistant replies are not evidence;
+synthetic content cannot establish a real-world answer.
+
+The focus overlay uses an unfilled one-point outline with low opacity. It no
+longer tints the window or displays the black Accessibility/Vision label; the
+pet and command bar carry activity status. The action marker is a small hollow
+ring rather than a white disk.
+
+The native observation collector also prioritizes result tables ahead of navigation
+sidebars, compares AX element identity rather than treating hashes as unique, and
+uses the owning table's selected-rows API where available. In the live Mail check,
+Brian used the real Mail app, but the run still stopped when vision could not
+match an unambiguous visible window. Real flight retrieval is **not yet verified**;
+passing the synthetic checks does not establish that workflow's reliability.
