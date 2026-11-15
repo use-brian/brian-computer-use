@@ -1,81 +1,74 @@
 import SwiftUI
-import BrianCore
 
 struct CommandView: View {
     @ObservedObject var model: CommandModel
     let dismiss: () -> Void
     @FocusState private var inputFocused: Bool
+    @State private var showingFeedback = false
+
+    private var needsAttention: Bool {
+        !model.isRunning && (model.hasError || (!model.isVerified && !model.events.isEmpty))
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                BrianAvatar(mood: model.isRunning ? .working : .idle, animated: false).frame(width: 30, height: 30)
-                Text("Brian").font(.headline)
-                Text("On your Mac").font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Text("⌃⌥ Space").font(.caption.monospaced()).foregroundStyle(.secondary)
-                Button(action: dismiss) { Image(systemName: "xmark") }
-                    .buttonStyle(.plain).accessibilityLabel("Dismiss")
-            }
-            HStack(spacing: 12) {
-                TextField("What would you like to do?", text: $model.instruction)
-                    .textFieldStyle(.plain).font(.system(size: 22))
-                    .focused($inputFocused).onSubmit { model.submit() }
-                    .disabled(model.isRunning).accessibilityLabel("Instruction")
-                if model.isRunning {
-                    Button(action: model.stop) { Image(systemName: "stop.fill").frame(width: 34, height: 34) }
-                        .buttonStyle(.borderedProminent).tint(.red).accessibilityLabel("Stop agent")
-                } else {
-                    Button(action: model.submit) { Image(systemName: "arrow.up").font(.headline).frame(width: 34, height: 34) }
-                        .buttonStyle(.borderedProminent).tint(Color(red: 0, green: 0.65, blue: 0.73))
-                        .disabled(model.instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        .accessibilityLabel("Run instruction")
+        HStack(spacing: 12) {
+            BrianAvatar(mood: model.isRunning ? .working : model.isVerified ? .happy : .idle,
+                        animated: model.isRunning)
+                .frame(width: 28, height: 28)
+            TextField("Ask Brian to do something…", text: $model.instruction)
+                .textFieldStyle(.plain)
+                .font(.system(size: 18))
+                .focused($inputFocused)
+                .onSubmit { model.submit() }
+                .disabled(model.isRunning)
+                .accessibilityLabel("Instruction")
+
+            if needsAttention {
+                Button { showingFeedback.toggle() } label: {
+                    Image(systemName: "exclamationmark.circle")
+                        .font(.system(size: 17)).foregroundStyle(.orange)
                 }
-            }
-            HStack {
-                Picker("Work in", selection: $model.target) {
-                    ForEach(AgentApp.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                }
-                .frame(width: 185).disabled(model.isRunning)
-                Spacer()
-                Text(model.modelStatus).font(.caption).foregroundStyle(.secondary)
-            }
-            Divider()
-            HStack(alignment: .top, spacing: 8) {
-                if model.isRunning { ProgressView().controlSize(.small) }
-                Text(model.status).font(.callout)
-                    .foregroundStyle(model.hasError ? Color.red : Color.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
-            }
-            if model.needsAccessibility {
-                Button("Open Accessibility Settings") {
-                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
-                }
-            }
-            if !model.events.isEmpty {
-                DisclosureGroup("Recent steps") {
-                    VStack(alignment: .leading, spacing: 5) {
-                        ForEach(Array(model.events.enumerated()), id: \.offset) { _, event in
-                            Text(event).font(.caption).foregroundStyle(.secondary)
+                .buttonStyle(.plain)
+                .accessibilityLabel("Task needs attention")
+                .help(model.status)
+                .popover(isPresented: $showingFeedback) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(model.status).font(.callout).textSelection(.enabled)
+                        if model.needsAccessibility {
+                            Button("Open Accessibility Settings") {
+                                NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+                            }
                         }
-                    }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 6)
-                }.font(.caption)
-            } else if !model.isRunning {
-                HStack(spacing: 8) {
-                    ForEach(["Press the \"File\" menu.", "Open TextEdit", "Search for SwiftUI examples"], id: \.self) { example in
-                        Button(example) { model.instruction = example; inputFocused = true }
-                            .buttonStyle(.bordered).controlSize(.small)
                     }
+                    .padding(16).frame(width: 320, alignment: .leading)
                 }
             }
-            Text(model.isRunning ? "Esc stops the agent · Closing this panel keeps it running" : "Enter runs · Esc dismisses")
-                .font(.caption2).foregroundStyle(.tertiary)
+
+            Button {
+                if model.isRunning { model.stop() } else { model.submit() }
+            } label: {
+                Image(systemName: model.isRunning ? "stop.fill" : "arrow.up")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 34, height: 34)
+                    .background { RoundedRectangle(cornerRadius: 10).fill(Color(red: 0, green: 0.65, blue: 0.73)) }
+            }
+            .buttonStyle(.plain)
+            .disabled(!model.isRunning && model.instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .opacity(!model.isRunning && model.instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.4 : 1)
+            .accessibilityLabel(model.isRunning ? "Stop agent" : "Run instruction")
+            .help(model.isRunning ? "Stop" : "Send")
         }
-        .padding(24).frame(width: 660).background(.regularMaterial)
+        .padding(.horizontal, 16)
+        .frame(width: 620, height: 64)
+        .background { RoundedRectangle(cornerRadius: 18).fill(.regularMaterial) }
+        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(.primary.opacity(0.08)))
         .onAppear { inputFocused = true }
         .onChange(of: model.focusToken) { inputFocused = true }
-        .onChange(of: model.isRunning) { if !model.isRunning { inputFocused = true } }
+        .onChange(of: model.isRunning) {
+            showingFeedback = false
+            if !model.isRunning { inputFocused = true }
+        }
         .onExitCommand { if model.isRunning { model.stop() } else { dismiss() } }
     }
 }

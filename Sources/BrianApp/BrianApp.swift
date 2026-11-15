@@ -14,7 +14,7 @@ enum BrianApp {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var panel: CommandPanel!
     private var statusItem: NSStatusItem!
     private var shortcut: GlobalShortcut!
@@ -24,11 +24,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let icon = Bundle.main.resourceURL.flatMap { NSImage(contentsOf: $0.appendingPathComponent("Brian.icns")) }
         if let icon { NSApp.applicationIconImage = icon }
-        panel = CommandPanel(contentRect: NSRect(x: 0, y: 0, width: 668, height: 245),
-                             styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
+        panel = CommandPanel(contentRect: NSRect(x: 0, y: 0, width: 620, height: 64),
+                             styleMask: [.borderless], backing: .buffered, defer: false)
         panel.title = "Brian"
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
         panel.isMovableByWindowBackground = true
         panel.isReleasedWhenClosed = false
         panel.level = .floating
@@ -49,6 +52,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let showPet = NSMenuItem(title: "Show Brian companion", action: #selector(showCompanion), keyEquivalent: "")
         showPet.target = self
         menu.addItem(showPet)
+        let targetMenu = NSMenu()
+        for (index, title) in ["Finder", "TextEdit"].enumerated() {
+            let item = NSMenuItem(title: title, action: #selector(selectTarget(_:)), keyEquivalent: "")
+            item.tag = index
+            item.target = self
+            targetMenu.addItem(item)
+        }
+        let targetItem = NSMenuItem(title: "Work in", action: nil, keyEquivalent: "")
+        targetItem.submenu = targetMenu
+        menu.addItem(targetItem)
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Brian", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
@@ -82,6 +95,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showCompanion() { companion.show() }
+
+    @objc private func selectTarget(_ sender: NSMenuItem) {
+        guard !model.isRunning else { return }
+        model.target = sender.tag == 0 ? .finder : .textEdit
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(selectTarget(_:)) {
+            menuItem.state = model.target == (menuItem.tag == 0 ? .finder : .textEdit) ? .on : .off
+            return !model.isRunning
+        }
+        return true
+    }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         showPanel()

@@ -2,20 +2,25 @@
 
 **Control + Option + Space → type a task → Enter → local agent loop.**
 
-Brian is a native macOS command panel. It runs the fine-tuned model from
+Brian is a native macOS command line: mascot, text input, and Send/Stop. It runs the fine-tuned model from
 `llm-research` locally, repeatedly observing the selected app, proposing one
-action, executing it, and checking the resulting accessibility tree.
+action, executing it, and checking the resulting accessibility tree. Model details,
+step logs, examples, and keyboard hints stay out of the input. An attention icon
+opens essential error or stopped-task feedback when needed.
 
 The floating **Brian companion** uses the existing cyan pixel mascot. Click it
 to open the command panel, drag it to reposition, or right-click for Open, Stop,
 and Hide. Its position is remembered. It blinks and bobs while idle, moves its
 feet while working, and smiles after verified completion. macOS Reduce Motion
-disables the motion. Restore a hidden companion from the menu-bar menu.
+disables the motion. Restore a hidden companion from the menu-bar menu. Dragging
+tracks the pointer in screen coordinates, with a five-point threshold to separate
+clicks from drags. It stays under the pointer across screen boundaries, then
+settles inside the available screen area and saves its position on release.
 
 ## Current scope
 
 - **Model:** Qwen3.5-4B, MLX 4-bit conversion, with the `mac-ax-bootstrap-v0` LoRA adapter.
-- **Apps:** Finder and TextEdit. Select the target in **Work in**. Opening Brian
+- **Apps:** Finder and TextEdit. Select the fallback target in the menu bar's **Work in** menu. Opening Brian
   while either app is frontmost selects that app automatically.
 - **Actions:** accessibility press and text replacement. Input is accessibility
   text; screenshots and voice are not used.
@@ -65,7 +70,8 @@ for local development; distribution signing/notarization is not configured.
 ## First run
 
 1. Open Finder or TextEdit and select the window to work in.
-2. Open Brian, choose the target app, type an instruction, and press Enter.
+2. Open Brian, type an instruction, and press Enter. The frontmost supported app
+   is selected automatically; use the menu bar's **Work in** menu for the fallback target.
 3. If prompted, open the privacy pane using Brian's settings button. Enable
    **Brian** in **Accessibility** (named **Device Control and Data Access** on
    newer macOS versions), then retry. macOS may require restarting Brian.

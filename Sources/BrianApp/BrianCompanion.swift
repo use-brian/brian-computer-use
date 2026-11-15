@@ -60,7 +60,7 @@ struct BrianAvatar: View {
 struct CompanionView: View {
     @ObservedObject var model: CommandModel
     let open: () -> Void
-    let move: (CGSize, Bool) -> Void
+    let didMove: () -> Void
     let hide: () -> Void
     @State private var hovering = false
 
@@ -69,6 +69,11 @@ struct CompanionView: View {
     }
     private var label: String {
         model.isRunning ? "Working…" : model.hasError ? "Needs you" : model.isVerified ? "Done!" : "Hey, I’m Brian"
+    }
+    private var interaction: CompanionInteraction {
+        let stopAction: (() -> Void)? = model.isRunning ? { model.stop() } : nil
+        return CompanionInteraction(label: label, open: open, stop: stopAction,
+            hide: hide, didMove: didMove, hover: { hovering = $0 })
     }
     var body: some View {
         VStack(spacing: 0) {
@@ -87,30 +92,115 @@ struct CompanionView: View {
             .background(.regularMaterial, in: Capsule())
         }
         .frame(width: 146, height: 158)
-        .contentShape(Rectangle())
-        .onHover { hovering = $0 }
-        .onTapGesture(perform: open)
-        .gesture(DragGesture(minimumDistance: 5)
-            .onChanged { move($0.translation, false) }
-            .onEnded { move($0.translation, true) })
-        .contextMenu {
-            Button("Open Brian", action: open)
-            if model.isRunning { Button("Stop task", action: model.stop) }
-            Button("Hide companion", action: hide)
-        }
-        .help("Click to give Brian a task. Drag to move. Right-click for options.")
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Brian companion")
-        .accessibilityValue(label)
-        .accessibilityAddTraits(.isButton)
-        .accessibilityAction { open() }
+        .overlay { interaction }
     }
+}
+
+/// Handle input in AppKit so window motion cannot feed back into gesture
+/// translation. Pointer and window origins are captured once in screen space.
+private struct CompanionInteraction: NSViewRepresentable {
+    let label: String
+    let open: () -> Void
+    let stop: (() -> Void)?
+    let hide: () -> Void
+    let didMove: () -> Void
+    let hover: (Bool) -> Void
+
+    func makeNSView(context: Context) -> CompanionInputView { CompanionInputView() }
+
+    func updateNSView(_ view: CompanionInputView, context: Context) {
+        view.open = open
+        view.stop = stop
+        view.hide = hide
+        view.didMove = didMove
+        view.hover = hover
+        view.setAccessibilityElement(true)
+        view.setAccessibilityRole(.button)
+        view.setAccessibilityLabel("Brian companion")
+        view.setAccessibilityValue(label)
+        view.setAccessibilityHelp("Click to give Brian a task. Drag to move. Right-click for options.")
+    }
+}
+
+private final class CompanionInputView: NSView {
+    var open: () -> Void = {}
+    var stop: (() -> Void)?
+    var hide: () -> Void = {}
+    var didMove: () -> Void = {}
+    var hover: (Bool) -> Void = { _ in }
+    private var pointerOrigin: CGPoint?
+    private var windowOrigin = CGPoint.zero
+    private var dragging = false
+    private var tracking: NSTrackingArea?
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        tracking = area
+    }
+
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .openHand) }
+    override func mouseEntered(with event: NSEvent) { hover(true) }
+    override func mouseExited(with event: NSEvent) { hover(false) }
+
+    override func mouseDown(with event: NSEvent) {
+        guard let window else { return }
+        pointerOrigin = NSEvent.mouseLocation
+        windowOrigin = window.frame.origin
+        dragging = false
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let pointerOrigin, let window else { return }
+        let pointer = NSEvent.mouseLocation
+        let dx = pointer.x - pointerOrigin.x
+        let dy = pointer.y - pointerOrigin.y
+        guard dragging || dx * dx + dy * dy >= 25 else { return }
+        dragging = true
+        NSCursor.closedHand.set()
+        // Clamp only on release: edges and monitor boundaries must not make
+        // the pet stick or change the offset under the pointer during a drag.
+        window.setFrameOrigin(CGPoint(x: windowOrigin.x + dx, y: windowOrigin.y + dy))
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard pointerOrigin != nil else { return }
+        let wasDragging = dragging
+        pointerOrigin = nil
+        dragging = false
+        NSCursor.openHand.set()
+        if wasDragging { didMove() }
+        else { open() }
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        let menu = NSMenu()
+        let openItem = menu.addItem(withTitle: "Open Brian", action: #selector(openBrian), keyEquivalent: "")
+        openItem.target = self
+        if stop != nil {
+            let stopItem = menu.addItem(withTitle: "Stop task", action: #selector(stopTask), keyEquivalent: "")
+            stopItem.target = self
+        }
+        let hideItem = menu.addItem(withTitle: "Hide companion", action: #selector(hideCompanion), keyEquivalent: "")
+        hideItem.target = self
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+
+    override func accessibilityPerformPress() -> Bool { open(); return true }
+    @objc private func openBrian() { open() }
+    @objc private func stopTask() { stop?() }
+    @objc private func hideCompanion() { hide() }
 }
 
 @MainActor
 final class CompanionController {
     private let panel: NSPanel
-    private var dragOrigin: CGPoint?
 
     init(model: CommandModel, open: @escaping () -> Void) {
         panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 146, height: 158),
@@ -124,7 +214,7 @@ final class CompanionController {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isReleasedWhenClosed = false
         panel.contentView = NSHostingView(rootView: CompanionView(model: model, open: open,
-            move: { [weak self] translation, done in self?.move(translation, done: done) },
+            didMove: { [weak self] in self?.finishMove() },
             hide: { [weak self] in self?.panel.orderOut(nil) }))
     }
 
@@ -138,21 +228,15 @@ final class CompanionController {
         panel.orderFrontRegardless()
     }
 
-    private func move(_ translation: CGSize, done: Bool) {
-        if dragOrigin == nil { dragOrigin = panel.frame.origin }
-        let origin = dragOrigin!
-        let position = CGPoint(x: origin.x + translation.width, y: origin.y - translation.height)
+    private func finishMove() {
         let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) }?.visibleFrame
-            ?? NSScreen.main!.visibleFrame
-        panel.setFrameOrigin(clamp(position, to: screen))
-        if done {
-            UserDefaults.standard.set([panel.frame.minX, panel.frame.minY], forKey: "companionPosition")
-            dragOrigin = nil
-        }
+            ?? NSScreen.main?.visibleFrame
+        if let screen { panel.setFrameOrigin(clamp(panel.frame.origin, to: screen)) }
+        UserDefaults.standard.set([panel.frame.minX, panel.frame.minY], forKey: "companionPosition")
     }
 
     private func clamp(_ point: CGPoint, to screen: CGRect) -> CGPoint {
-        CGPoint(x: min(max(point.x, screen.minX), screen.maxX - panel.frame.width),
-                y: min(max(point.y, screen.minY), screen.maxY - panel.frame.height))
+        CGPoint(x: min(max(point.x, screen.minX), max(screen.minX, screen.maxX - panel.frame.width)),
+                y: min(max(point.y, screen.minY), max(screen.minY, screen.maxY - panel.frame.height)))
     }
 }
