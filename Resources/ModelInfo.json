@@ -1,0 +1,13 @@
+{
+  "base": "Qwen/Qwen3.5-4B",
+  "conversion": "mlx-community/Qwen3.5-4B-4bit",
+  "revision": "0e7ffd5c629ef7719d4cbc04069232580bfa9d9c",
+  "adapter": "mac-ax-bootstrap-v0",
+  "runtime": "MLX-LM 0.32.2 / mac-control MCP",
+  "input": "accessibility text",
+  "architecture": "arm64",
+  "bundled_runtime_minimum_macos": "27.2",
+  "apps": ["Finder", "TextEdit"],
+  "scope": "Experimental next-action policy trained on synthetic examples; not a general task planner.",
+  "source": "llm-research/experiments/002-mac-accessibility"
+}

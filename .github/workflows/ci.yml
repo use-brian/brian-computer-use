@@ -9,10 +9,10 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      - name: Test command interpretation
+      - name: Test agent loop and local transport
         run: swift test
       - name: Build app bundle
-        run: bash scripts/build-app.sh
+        run: bash scripts/build-app.sh --shell-only
       - name: Verify bundle
         run: |
           plutil -lint dist/Brian.app/Contents/Info.plist

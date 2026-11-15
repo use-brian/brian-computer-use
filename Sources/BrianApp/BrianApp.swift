@@ -18,9 +18,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: CommandPanel!
     private var statusItem: NSStatusItem!
     private var shortcut: GlobalShortcut!
+    private var companion: CompanionController!
     private let model = CommandModel()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let icon = Bundle.main.resourceURL.flatMap { NSImage(contentsOf: $0.appendingPathComponent("Brian.icns")) }
+        if let icon { NSApp.applicationIconImage = icon }
         panel = CommandPanel(contentRect: NSRect(x: 0, y: 0, width: 668, height: 245),
                              styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
         panel.title = "Brian"
@@ -36,14 +39,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.onComplete = { [weak self] in self?.panel.orderOut(nil) }
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "command.square", accessibilityDescription: "Brian")
+        let menuIcon = (icon?.copy() as? NSImage) ?? NSImage(systemSymbolName: "command.square", accessibilityDescription: "Brian")
+        menuIcon?.size = NSSize(width: 19, height: 19)
+        statusItem.button?.image = menuIcon
         let menu = NSMenu()
         let show = NSMenuItem(title: "Show Brian", action: #selector(showPanel), keyEquivalent: "")
         show.target = self
         menu.addItem(show)
+        let showPet = NSMenuItem(title: "Show Brian companion", action: #selector(showCompanion), keyEquivalent: "")
+        showPet.target = self
+        menu.addItem(showPet)
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Brian", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
+        companion = CompanionController(model: model) { [weak self] in self?.showPanel() }
+        companion.show()
 
         shortcut = GlobalShortcut { [weak self] in
             guard let self else { return }
@@ -58,6 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showPanel() {
+        model.captureTarget()
         // Place on the screen under the pointer, including multi-monitor setups.
         let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }
             ?? NSScreen.main
@@ -70,12 +81,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.focusToken = UUID()
     }
 
+    @objc private func showCompanion() { companion.show() }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         showPanel()
         return true
     }
 
-    func applicationWillTerminate(_ notification: Notification) { shortcut.unregister() }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        shortcut.unregister()
+        Task {
+            await model.shutdown()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
 }
 
 private final class CommandPanel: NSPanel {
