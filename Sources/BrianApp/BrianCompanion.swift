@@ -78,6 +78,7 @@ struct CompanionView: View {
     let willInteract: () -> Void
     let open: () -> Void
     let didMove: (Bool) -> Void
+    let readReply: () -> Void
     let hide: () -> Void
     @State private var hovering = false
 
@@ -90,21 +91,22 @@ struct CompanionView: View {
     private var interaction: CompanionInteraction {
         let stopAction: (() -> Void)? = model.isRunning ? { model.stop() } : nil
         return CompanionInteraction(label: label, willInteract: willInteract, open: open, stop: stopAction,
-            hide: hide, didMove: didMove, hover: { hovering = $0 })
+            hide: hide, didMove: didMove, readReply: model.hasResponse && !model.isRunning ? readReply : nil, hover: { hovering = $0 })
     }
     var body: some View {
         VStack(spacing: 0) {
             if !motion.compact { Text(motion.moving ? "On my way…" : label)
-                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .lineLimit(1).minimumScaleFactor(0.8)
                 .foregroundStyle(.primary)
                 .padding(.horizontal, 10).padding(.vertical, 5)
                 .background(.regularMaterial, in: Capsule())
-                .opacity(hovering || motion.moving || model.isRunning || model.hasError || model.isFinished ? 1 : 0)
+                .opacity(hovering || motion.moving || model.isRunning || (model.hasError && !model.hasResponse) ? 1 : 0)
             }
             BrianAvatar(mood: motion.moving ? .running : mood, direction: motion.direction)
-                .frame(width: motion.compact ? 54 : 122, height: motion.compact ? 54 : 110)
+                .frame(width: motion.compact ? 38 : 80, height: motion.compact ? 38 : 72)
         }
-        .frame(width: motion.compact ? 64 : 146, height: motion.compact ? 64 : 138)
+        .frame(width: motion.compact ? 44 : 96, height: motion.compact ? 44 : 100)
         .overlay { interaction }
     }
 }
@@ -118,6 +120,7 @@ private struct CompanionInteraction: NSViewRepresentable {
     let stop: (() -> Void)?
     let hide: () -> Void
     let didMove: (Bool) -> Void
+    let readReply: (() -> Void)?
     let hover: (Bool) -> Void
 
     func makeNSView(context: Context) -> CompanionInputView { CompanionInputView() }
@@ -128,6 +131,7 @@ private struct CompanionInteraction: NSViewRepresentable {
         view.stop = stop
         view.hide = hide
         view.didMove = didMove
+        view.readReply = readReply
         view.hover = hover
         view.setAccessibilityElement(true)
         view.setAccessibilityRole(.button)
@@ -143,6 +147,7 @@ private final class CompanionInputView: NSView {
     var stop: (() -> Void)?
     var hide: () -> Void = {}
     var didMove: (Bool) -> Void = { _ in }
+    var readReply: (() -> Void)?
     var hover: (Bool) -> Void = { _ in }
     private var pointerOrigin: CGPoint?
     private var windowOrigin = CGPoint.zero
@@ -202,6 +207,10 @@ private final class CompanionInputView: NSView {
         let menu = NSMenu()
         let openItem = menu.addItem(withTitle: "Open Brian", action: #selector(openBrian), keyEquivalent: "")
         openItem.target = self
+        if readReply != nil {
+            let replyItem = menu.addItem(withTitle: "Read last reply", action: #selector(showReply), keyEquivalent: "")
+            replyItem.target = self
+        }
         if stop != nil {
             let stopItem = menu.addItem(withTitle: "Stop task", action: #selector(stopTask), keyEquivalent: "")
             stopItem.target = self
@@ -213,6 +222,7 @@ private final class CompanionInputView: NSView {
 
     override func accessibilityPerformPress() -> Bool { open(); return true }
     @objc private func openBrian() { open() }
+    @objc private func showReply() { readReply?() }
     @objc private func stopTask() { stop?() }
     @objc private func hideCompanion() { hide() }
 }
@@ -222,6 +232,8 @@ final class CompanionController {
     private let panel: NSPanel
     private let model: CommandModel
     private let motion = CompanionMotion()
+    private let reply = CompanionReplyController()
+    private var dismissedReplyVersion: Int?
     private var subscriptions = Set<AnyCancellable>()
     private var movement: Task<Void, Never>?
     private var movementID = UUID()
@@ -230,12 +242,12 @@ final class CompanionController {
     private var hiddenByUser = false
     private var manualUntil = Date.distantPast
     private var interacting = false
-    private let normalSize = CGSize(width: 146, height: 138)
-    private let cursorSize = CGSize(width: 64, height: 64)
+    private let normalSize = CGSize(width: 96, height: 100)
+    private let cursorSize = CGSize(width: 44, height: 44)
 
     init(model: CommandModel, open: @escaping () -> Void) {
         self.model = model
-        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 146, height: 138),
+        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 96, height: 100),
                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.title = "Brian companion"
         panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = false
@@ -244,7 +256,21 @@ final class CompanionController {
         panel.isReleasedWhenClosed = false
         panel.contentView = NSHostingView(rootView: CompanionView(model: model, motion: motion,
             willInteract: { [weak self] in self?.beginInteraction() }, open: open,
-            didMove: { [weak self] dragged in self?.finishMove(dragged: dragged) }, hide: { [weak self] in self?.hide() }))
+            didMove: { [weak self] dragged in self?.finishMove(dragged: dragged) },
+            readReply: { [weak self] in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.dismissedReplyVersion = nil
+                    self.updateReply()
+                    self.reply.focus()
+                }
+            }, hide: { [weak self] in self?.hide() }))
+        model.$responseVersion.removeDuplicates().dropFirst().sink { [weak self] _ in
+            Task { @MainActor in self?.updateReply() }
+        }.store(in: &subscriptions)
+        model.$hasResponse.removeDuplicates().sink { [weak self] _ in
+            Task { @MainActor in self?.updateReply() }
+        }.store(in: &subscriptions)
         model.$activityTarget.compactMap { $0 }.sink { [weak self] rect in
             Task { @MainActor in self?.follow(rect) }
         }.store(in: &subscriptions)
@@ -258,12 +284,13 @@ final class CompanionController {
         hiddenByUser = false
         guard let screen = NSScreen.main?.visibleFrame else { return }
         let saved = UserDefaults.standard.array(forKey: "companionPosition") as? [Double]
-        let point = saved?.count == 2 ? CGPoint(x: saved![0], y: saved![1]) : CGPoint(x: screen.maxX-166, y: screen.minY+50)
+        let point = saved?.count == 2 ? CGPoint(x: saved![0], y: saved![1]) : CGPoint(x: screen.maxX-normalSize.width-20, y: screen.minY+50)
         let targetScreen = NSScreen.screens.first { $0.visibleFrame.contains(point) }?.visibleFrame ?? screen
         motion.compact = model.isRunning
         panel.setFrame(CompanionPlacement.clamp(CGRect(origin: point, size: model.isRunning ? cursorSize : normalSize), to: targetScreen), display: true)
         restingFrame = panel.frame
         panel.orderFrontRegardless()
+        updateReply()
     }
 
     func runToBar(_ frame: CGRect) {
@@ -295,11 +322,12 @@ final class CompanionController {
     }
 
     private func workChanged(_ running: Bool) {
+        if running { reply.hide() }
         guard !hiddenByUser, !interacting else { return }
         if running {
             motion.compact = true
             if let target = model.activityTarget { follow(target) }
-            else { move(to: CGRect(x: panel.frame.midX-32, y: panel.frame.midY-32, width: 64, height: 64)) }
+            else { move(to: CGRect(x: panel.frame.midX-cursorSize.width/2, y: panel.frame.midY-cursorSize.height/2, width: cursorSize.width, height: cursorSize.height)) }
         } else {
             motion.compact = false
             if let bar { runToBar(bar) }
@@ -308,6 +336,7 @@ final class CompanionController {
     }
 
     private func move(to destination: CGRect) {
+        reply.hide()
         movement?.cancel()
         let id = UUID(); movementID = id
         let start = panel.frame
@@ -315,7 +344,7 @@ final class CompanionController {
         motion.direction = destination.midX >= start.midX ? 1 : -1
         panel.orderFrontRegardless()
         guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, distance > 3 || start.size != destination.size else {
-            panel.setFrame(destination, display: true); motion.moving = false; return
+            panel.setFrame(destination, display: true); motion.moving = false; updateReply(); return
         }
         motion.moving = true
         let duration = motion.compact ? min(0.30, max(0.15, distance/2400)) : min(0.85, max(0.2, distance/950))
@@ -329,9 +358,20 @@ final class CompanionController {
                     y: start.minY+(destination.minY-start.minY)*ease,
                     width: start.width+(destination.width-start.width)*ease,
                     height: start.height+(destination.height-start.height)*ease), display: true)
-                if t >= 1 { motion.moving = false; return }
+                if t >= 1 { motion.moving = false; updateReply(); return }
                 try? await Task.sleep(for: .milliseconds(16))
             }
+        }
+    }
+
+    private func updateReply() {
+        guard !hiddenByUser, !interacting, !motion.moving, !model.isRunning,
+              model.hasResponse, !model.status.isEmpty,
+              dismissedReplyVersion != model.responseVersion else { reply.hide(); return }
+        reply.show(text: model.status, beside: panel.frame, screen: screen(for: panel.frame)) { [weak self] in
+            guard let self else { return }
+            dismissedReplyVersion = model.responseVersion
+            reply.hide()
         }
     }
 
@@ -342,11 +382,13 @@ final class CompanionController {
         }?.visibleFrame ?? frame
     }
     private func beginInteraction() {
+        reply.hide()
         movement?.cancel(); movementID = UUID(); motion.moving = false
         interacting = true
         manualUntil = Date().addingTimeInterval(2)
     }
     private func finishMove(dragged: Bool) {
+        defer { updateReply() }
         interacting = false
         manualUntil = Date().addingTimeInterval(2)
         if motion.compact && !model.isRunning {
@@ -360,5 +402,5 @@ final class CompanionController {
         UserDefaults.standard.set([panel.frame.minX, panel.frame.minY], forKey: "companionPosition")
         manualUntil = Date().addingTimeInterval(2)
     }
-    private func hide() { hiddenByUser = true; movement?.cancel(); panel.orderOut(nil) }
+    private func hide() { hiddenByUser = true; movement?.cancel(); panel.orderOut(nil); reply.hide() }
 }

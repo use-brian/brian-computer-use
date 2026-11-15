@@ -209,3 +209,9 @@ Automatic sort verification previously left nested native menus stranded after
 the search; removing that unrelated step avoids trapping Mail in menu tracking.
 After a normal Mail restart, a live repeat of the reported search completed;
 Mail’s File menu then opened and dismissed normally. All 45 Swift tests passed.
+
+The companion is smaller (80-point idle artwork, 38-point working artwork).
+When a task ends it displays the actual reply beside the pet in a dismissible,
+scrollable speech bubble. New work hides the reply; the bar still provides a
+reply button for reopening the result. Right-click the pet and choose **Read last
+reply** to reopen and select its text.

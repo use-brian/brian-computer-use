@@ -84,7 +84,7 @@ struct CommandView: View {
             if model.isRunning { showingFeedback = false }
             if !model.isRunning { inputFocused = true }
         }
-        .onChange(of: model.responseVersion) { showingFeedback = true }
+        .onChange(of: model.responseVersion) { showingFeedback = false }
         .onChange(of: model.pendingConfirmation) { showingFeedback = model.pendingConfirmation != nil }
         .onExitCommand { if model.isRunning { model.stop() } else { dismiss() } }
     }
