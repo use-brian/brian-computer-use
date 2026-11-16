@@ -4,14 +4,43 @@ cd "$(dirname "$0")/.."
 runtime_bundle="${BRIAN_RUNTIME_BUNDLE:-}"
 research_root="${BRIAN_RESEARCH_ROOT:-}"
 shell_only=false
+signing_identity="${BRIAN_SIGNING_IDENTITY:-}"
+ad_hoc=false
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --runtime-bundle) runtime_bundle="${2:?Missing runtime bundle path}"; shift 2 ;;
     --research-root) research_root="${2:?Missing research root path}"; shift 2 ;;
     --shell-only) shell_only=true; shift ;;
+    --signing-identity) signing_identity="${2:?Missing signing identity}"; shift 2 ;;
+    --ad-hoc) ad_hoc=true; shift ;;
     *) printf 'Unknown argument: %s\n' "$1" >&2; exit 2 ;;
   esac
 done
+# Check signing before building or replacing the installed development app.
+# An ad-hoc signature identifies one binary version, so TCC grants do not survive updates.
+if [ "$ad_hoc" = true ]; then
+  if [ -n "$signing_identity" ] && [ "$signing_identity" != "-" ]; then
+    printf 'Choose --signing-identity or --ad-hoc, not both.\n' >&2
+    exit 2
+  fi
+  signing_identity="-"
+elif [ -z "$signing_identity" ] && [ "$shell_only" = true ]; then
+  signing_identity="-"
+elif [ -z "$signing_identity" ] || [ "$signing_identity" = "-" ]; then
+  printf 'A stable signing identity is required for app updates. Set BRIAN_SIGNING_IDENTITY or pass --signing-identity with an Apple Development or Developer ID Application identity.\nThe current Brian.app has not been changed. --ad-hoc is available only for explicit disposable development builds; it can invalidate permissions.\n' >&2
+  exit 2
+fi
+if [ "$signing_identity" != "-" ]; then
+  signing_identity="$(security find-identity -v -p codesigning | python3 -c '
+import re, sys
+requested = sys.argv[1]
+identities = re.findall(r"([A-Fa-f0-9]{40}) \"([^\"]+)\"", sys.stdin.read())
+matches = [fingerprint for fingerprint, name in identities if requested == name or requested.upper() == fingerprint.upper()]
+if len(matches) != 1:
+    sys.exit("The requested signing identity must match exactly one valid certificate and private key. Brian.app was not changed.")
+print(matches[0])
+' "$signing_identity")"
+fi
 if [ "$shell_only" = false ]; then
   if [ -z "$runtime_bundle" ] && [ -n "$research_root" ]; then
     bash scripts/build-planner-runtime.sh "$research_root"
@@ -66,8 +95,8 @@ if [ "$shell_only" = false ]; then
   # Preserve signatures already present in the frozen runtime. Sign the native
   # launcher and outer app last; no files may change after this point.
 fi
-codesign --force --sign - "$app_dir/Contents/MacOS/brian-runtime-host"
-codesign --force --sign - "$app_dir"
+codesign --force --sign "$signing_identity" "$app_dir/Contents/MacOS/brian-runtime-host"
+codesign --force --sign "$signing_identity" "$app_dir"
 codesign --verify --deep --strict "$app_dir"
 plutil -lint "$app_dir/Contents/Info.plist"
 rm -rf "$PWD/dist/Brian.app"

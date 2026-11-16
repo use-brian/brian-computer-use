@@ -146,7 +146,7 @@ bash scripts/build-planner-runtime.sh /absolute/path/to/llm-research
 
 Full builds include model licenses, weights/adapter hashes, and research
 provenance when `--research-root` is supplied. Weights, runtime binaries, and build
-outputs stay out of Git. Signing is ad hoc for local development; release signing
+outputs stay out of Git. Full builds require a stable signing identity; release signing
 and notarization are not configured.
 
 ## Accessibility setup
@@ -531,3 +531,34 @@ can reinforce a small curated procedure library.
 
 See [memory architecture, controls, build instructions and limits](docs/memory.md)
 and the [synthetic multilingual retrieval evaluation](docs/memory-evaluation.json).
+
+## Preserve macOS permissions across updates
+
+The app previously used ad-hoc signing. Apple documents that this ties its designated
+requirement to one specific code version, so rebuilding can invalidate an otherwise
+enabled Accessibility entry. Normal full builds now require a stable signing identity
+and fail before changing the existing app if none is configured.
+
+Install an Apple Development identity (local development) or Developer ID Application
+identity (direct distribution), including its private key, through your Apple developer
+account/Xcode or your team's existing signing setup. Keep using the same signing lineage,
+bundle identifier and app location across builds. No valid identity was installed on
+this Mac when this change was made; no certificate or private key was created automatically.
+
+```sh
+security find-identity -v -p codesigning
+export BRIAN_SIGNING_IDENTITY='EXACT CERTIFICATE NAME OR SHA1 FROM THE LIST'
+bash scripts/build-app.sh --runtime-bundle "$PWD/dist/planner-runtime/mac-control"
+```
+
+`--signing-identity` is also supported. Switching from the current ad-hoc build to stable
+signing requires a final one-time permission refresh. Subsequent compatible signed
+updates should retain access; this has not yet been verified locally because the
+certificate setup is outstanding. This is identity signing, not a complete notarized
+distribution pipeline. The existing runtime keeps its bundled dependency signatures.
+
+`--shell-only` retains ad-hoc signing for UI/CI builds. Explicit `--ad-hoc` allows a full
+disposable development build, with the known permission-reset consequence. Neither is
+the normal update path for an app with granted permissions.
+
+Reference: [Apple TN3127: code-signing requirements](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements).
