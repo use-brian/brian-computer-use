@@ -9,6 +9,22 @@ enum BrianApp {
         let delegate = AppDelegate()
         app.delegate = delegate
         app.setActivationPolicy(.accessory)
+        // Accessory apps do not get SwiftUI's default Edit menu. Install the
+        // responder-chain equivalents used by native text fields explicitly.
+        let mainMenu = NSMenu()
+        let application = NSMenuItem()
+        let applicationMenu = NSMenu(title: "Brian")
+        applicationMenu.addItem(withTitle: "Quit Brian", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        application.submenu = applicationMenu; mainMenu.addItem(application)
+        let edit = NSMenuItem()
+        let editMenu = NSMenu(title: "Edit")
+        for (title, action, key) in [("Undo", "undo:", "z"), ("Cut", "cut:", "x"), ("Copy", "copy:", "c"), ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a")] {
+            editMenu.addItem(withTitle: title, action: Selector(action), keyEquivalent: key)
+        }
+        let redo = editMenu.insertItem(withTitle: "Redo", action: Selector("redo:"), keyEquivalent: "z", at: 1)
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        edit.submenu = editMenu; mainMenu.addItem(edit)
+        app.mainMenu = mainMenu
         withExtendedLifetime(delegate) { app.run() }
     }
 }

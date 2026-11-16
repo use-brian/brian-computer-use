@@ -3,6 +3,15 @@ import XCTest
 
 final class MailSearchSessionTests: XCTestCase {
     let plan = MailSearchPlan(topics: ["flight"], date: "2026-11-16", dateScope: "event", dateVariants: ["Nov 16", "November 16"], queries: ["flight Nov 16", "flight November 16", "flight"])
+    func testUndatedPlanRejectsDateFiltersInventedLater() {
+        let plan = MailSearchPlan(topics: ["invoice", "AOGB"], queries: ["invoice AOGB", "AOGB"])
+        var session = MailSearchSession(plan: plan)
+        session.searched("invoice AOGB")
+        XCTAssertEqual(session.correctedQuery("invoice November 16"), "AOGB")
+        XCTAssertEqual(session.correctedQuery("invoice 2026-11-16"), "AOGB")
+        XCTAssertEqual(session.correctedQuery("invoice 16 Nov"), "AOGB")
+        XCTAssertEqual(session.correctedQuery("invoice tomorrow"), "AOGB")
+    }
     func testRelativeWordsAndCaseVariantsCannotRepeatSearch() {
         var session = MailSearchSession(plan: plan)
         XCTAssertEqual(session.correctedQuery("flights tmr"), "flight Nov 16")

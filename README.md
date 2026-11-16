@@ -345,3 +345,41 @@ Mail run for an explicit November 16, 2026 request searched, opened a real
 booking, and returned observed itinerary text containing the date, route, and
 departure time. This verifies that sampled workflow, not exhaustive retrieval
 of every matching message or every possible itinerary layout.
+
+
+### Selected-window background mode (0.7.0)
+
+Use the **Mac** target menu in the command bar to choose an open app window.
+Brian pins that process and Accessibility window for the entire task, observes
+only that window, and does not activate or raise the target app. You can use
+other apps while supported Accessibility operations and PID-directed window
+input run. Choose **Mac — across apps** for tasks that need several apps.
+
+Window mode does not silently widen its scope: closing/minimizing the target
+stops the task; another app becoming foreground does not. Global URL opening,
+shared clipboard shortcuts, new-window shortcuts, app menus, and global vision
+scrolling are unavailable in this mode. Unsupported input
+asks for foreground/Mac mode instead. App-local keyboard input is allowed only
+while the selected window still owns that app's focus. Keep the target open and
+avoid editing that same window while Brian works. Individual apps can refuse
+background input or raise their own UI; this is not a separate macOS session.
+The focus highlight is suppressed when the selected app is in the background.
+
+The native chat field has standard Edit menu equivalents: Command-A/X/C/V,
+Command-Z, and Shift-Command-Z. These apply to Brian's editor, independently of
+restrictions on agent-issued clipboard shortcuts in window mode.
+
+Search dates must be grounded in the current request. Standalone search-intent extraction
+excludes previous task context; explicit references such as “that day”
+can reuse an earlier user-supplied date. An undated invoice search has no date
+variants, and subsequent model actions cannot add an unrequested date filter.
+Regression coverage includes the invoice-to-AOGB request after a dated flight
+conversation, plus an actual local-model extraction smoke test.
+
+0.7.0 validation: 67 Swift tests and 26 Python tests passed. The actual bundled
+model's extraction smoke test kept the invoice-to-AOGB request undated after a
+flight-date conversation. A live selected-Mail-window search completed while
+Calculator accepted clicks and keyboard input. Command-A, copy, cut, paste, and
+undo were exercised in the live chat field; the original invoice draft was
+restored. This establishes the sampled Mail workflow, not universal background
+compatibility for every macOS app or every control.

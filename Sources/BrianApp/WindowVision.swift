@@ -22,7 +22,8 @@ import BrianCore
         let candidates = content.windows.filter { $0.owningApplication?.processID == pid && $0.windowLayer == 0 && $0.frame.width > 40 && $0.frame.height > 40 }
         let window: SCWindow?
         if let expectedFrame {
-            window = candidates.first { Self.sameFrame($0.frame, expectedFrame) }
+            let matches = candidates.filter { Self.sameFrame($0.frame, expectedFrame) }
+            window = matches.count == 1 ? matches[0] : nil
         } else {
             let ordered = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
             let frontID = ordered.first { ($0[kCGWindowOwnerPID as String] as? Int) == Int(pid) && ($0[kCGWindowLayer as String] as? Int) == 0 }?[kCGWindowNumber as String] as? UInt32

@@ -4,6 +4,10 @@ import BrianCore
 
 @MainActor
 final class CommandModel: ObservableObject {
+    @Published var windows: [SelectedWindow] = []
+    @Published var selectedWindowID: UUID?
+    var selectedWindow: SelectedWindow? { windows.first { $0.id == selectedWindowID } }
+    var targetLabel: String { selectedWindow?.name ?? "Mac" }
     @Published var activityTarget: CGRect?
     @Published var instruction = ""
     @Published var status = ""
@@ -44,8 +48,10 @@ final class CommandModel: ObservableObject {
         task = Task { [self] in
             defer { desktop.finish(); isRunning = false; task = nil }
             do {
+                let window = selectedWindow
+                desktop.bind(window)
                 let result = try await NaturalAgent(planner: runtime, tools: desktop).run(
-                    task: text, app: foregroundApp, conversation: conversation,
+                    task: text, app: window?.app ?? foregroundApp, conversation: conversation, scope: window?.scope,
                     approve: { [weak self] reason in await self?.requestApproval(reason) ?? false },
                     onEvent: { [weak self] message in self?.status = message })
                 try Task.checkCancellation()
@@ -101,6 +107,15 @@ final class CommandModel: ObservableObject {
         guard !isRunning, let id = NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
               id != Bundle.main.bundleIdentifier else { return }
         foregroundApp = id
+        let previous = selectedWindow
+        windows = desktop.availableWindows()
+        if let previous {
+            if let match = windows.first(where: { $0.pid == previous.pid && CFEqual($0.window, previous.window) }) {
+                selectedWindowID = match.id
+            } else {
+                windows.append(previous); selectedWindowID = previous.id
+            }
+        }
     }
     func newTask() {
         guard !isRunning else { return }

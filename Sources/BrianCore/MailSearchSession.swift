@@ -36,7 +36,12 @@ public struct MailSearchSession: Codable, Sendable {
     public func correctedQuery(_ proposed: String) -> String? {
         let words = Set(proposed.lowercased().split(whereSeparator: { !$0.isLetter }).map(String.init))
         let relativeInsteadOfDate = plan?.date != nil && plan?.literal == false && !words.isDisjoint(with: ["tmr", "tmrw", "tomorrow", "today", "yesterday"])
-        if tried(proposed) || relativeInsteadOfDate { return nextQuery }
+        // An undated plan cannot gain a date restriction from the calendar,
+        // another task, or a later model action.
+        let datePattern = #"(?i)\b(?:today|tomorrow|tmr|tmrw|yesterday|(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}|\d{1,2}\s+(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)|\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}(?:/\d{2,4})?)\b"#
+        let inventedDate = plan != nil && plan?.date == nil && plan?.literal == false &&
+            proposed.range(of: datePattern, options: .regularExpression) != nil && !(plan?.queries.contains(proposed) ?? false)
+        if tried(proposed) || relativeInsteadOfDate || inventedDate { return nextQuery }
         return attempts.count < 14 ? proposed : nil
     }
     public mutating func searched(_ query: String) { attempts.append(Attempt(query: query)); pending = true }

@@ -5,6 +5,29 @@ import BrianCore
 @MainActor
 final class DesktopController: DesktopTools {
     private let overlay = AgentFocusOverlay()
+    private var selectedWindow: SelectedWindow?
+    func bind(_ window: SelectedWindow?) { selectedWindow = window }
+    func availableWindows() -> [SelectedWindow] {
+        guard AXIsProcessTrusted() else { return [] }
+        return NSWorkspace.shared.runningApplications.filter { running in
+            running.activationPolicy == .regular && running.bundleIdentifier != Bundle.main.bundleIdentifier &&
+            !protectedApps.contains(running.bundleIdentifier ?? "") && allowsApp(running.bundleIdentifier ?? "", url: running.bundleURL)
+        }.flatMap { running -> [SelectedWindow] in
+            guard let id = running.bundleIdentifier else { return [] }
+            let root = AXUIElementCreateApplication(running.processIdentifier)
+            AXUIElementSetMessagingTimeout(root, 0.3)
+            return (attribute(root, kAXWindowsAttribute) as? [AXUIElement] ?? []).filter {
+                attribute($0, kAXMinimizedAttribute) as? Bool != true && string($0, kAXSubroleAttribute) == "AXStandardWindow"
+            }.map { SelectedWindow(app: id, name: running.localizedName ?? id, pid: running.processIdentifier,
+                                   window: $0, title: string($0, kAXTitleAttribute)) }
+        }
+    }
+    private func showTarget(rect: CGRect?, label: String, cursor: Bool = false, vision: Bool = false) {
+        if let selectedWindow, NSWorkspace.shared.frontmostApplication?.processIdentifier != selectedWindow.pid {
+            overlay.hide(); return
+        }
+        overlay.show(rect: rect, label: label, cursor: cursor, vision: vision)
+    }
     private let vision = WindowVision()
     func watchTargets(_ handler: @escaping (CGRect?) -> Void) { overlay.onTarget = handler }
     private(set) var confirmationPreview: VisualTargetPreview?
@@ -60,7 +83,11 @@ final class DesktopController: DesktopTools {
         references.removeAll()
         windowReference = nil
         observedForeground = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        let running = app.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0).first }
+        if let selectedWindow {
+            try selectedWindow.validate()
+            guard app == nil || app == selectedWindow.app else { throw failure("The task tried to leave the selected app.") }
+        }
+        let running = selectedWindow.flatMap { NSRunningApplication(processIdentifier: $0.pid) } ?? app.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0).first }
             ?? NSWorkspace.shared.runningApplications.first { $0.isActive && $0.bundleIdentifier != Bundle.main.bundleIdentifier }
         processID = running?.processIdentifier
         let identifier = running?.bundleIdentifier ?? app ?? ""
@@ -121,7 +148,7 @@ final class DesktopController: DesktopTools {
             }
         }
         let windows = attribute(root, kAXWindowsAttribute) as? [AXUIElement] ?? []
-        let window = element(root, kAXFocusedWindowAttribute)
+        let window = selectedWindow?.window ?? element(root, kAXFocusedWindowAttribute)
             ?? element(root, kAXMainWindowAttribute)
             ?? windows.first { attribute($0, kAXMainAttribute) as? Bool == true }
             ?? windows.first { attribute($0, kAXFocusedAttribute) as? Bool == true } ?? windows.first
@@ -145,13 +172,13 @@ final class DesktopController: DesktopTools {
                 }
             }
             contentRoots(window, depth: 0)
-            if let focused = element(root, kAXFocusedUIElementAttribute) { walk(focused, depth: 0) }
+            if let focused = element(root, kAXFocusedUIElementAttribute), selectedWindow?.contains(focused) != false { walk(focused, depth: 0) }
             // Result tables precede mailbox/navigation sidebars in the bounded snapshot.
             for list in resultLists { walk(list, depth: 0) }
             walk(window, depth: 0)
-            overlay.show(rect: frame(window), label: "Reading \(name)", vision: snapshot != nil)
+            showTarget(rect: frame(window), label: "Reading \(name)", vision: snapshot != nil)
         } else { overlay.hide() }
-        if let menu = element(root, kAXMenuBarAttribute) { walk(menu, depth: 0) }
+        if selectedWindow == nil, let menu = element(root, kAXMenuBarAttribute) { walk(menu, depth: 0) }
         let result = DesktopObservation(app: identifier, name: name,
             window: window.map { string($0, kAXTitleAttribute) } ?? "",
             accessibility: trusted, truncated: truncated, elements: rows, vision: snapshot)
@@ -164,7 +191,7 @@ final class DesktopController: DesktopTools {
         if action.kind == "vision_click", let capture = vision.capture,
            let point = try? VisualPoint(action.value ?? "") {
             confirmationPreview = VisualTargetPreview(image: NSImage(cgImage: capture.image, size: .zero), x: point.x, y: point.y)
-            overlay.show(rect: CGRect(x: capture.frame.minX + capture.frame.width * point.x - 12,
+            showTarget(rect: CGRect(x: capture.frame.minX + capture.frame.width * point.x - 12,
                 y: capture.frame.minY + capture.frame.height * point.y - 12, width: 24, height: 24),
                 label: action.message ?? "Click", cursor: true, vision: true)
             return "Click ‘\(action.message ?? "this control")’ in \(observation.name) using vision? Review the orange target before continuing."
@@ -186,9 +213,11 @@ final class DesktopController: DesktopTools {
     func execute(_ action: PlannerAction, observation: DesktopObservation) async throws -> DesktopToolResult {
         try Task.checkCancellation()
         try action.validate(observation: observation, apps: applications)
+        if let selectedWindow { try selectedWindow.validate(); try selectedWindow.scope.validate(action) }
         if !action.kind.hasPrefix("vision_") { vision.clear() }
         switch action.kind {
         case "open_app":
+            if let selectedWindow { return .init(app: selectedWindow.app, message: "Continue within the selected window; it remains in the background.") }
             guard let id = action.app, allowsApp(id, url: applicationURLs[id]) else { throw AgentError.invalidAction }
             if let running = NSRunningApplication.runningApplications(withBundleIdentifier: id).first {
                 running.activate(options: [])
@@ -207,9 +236,9 @@ final class DesktopController: DesktopTools {
                          message: "Opened the requested address/search. Inspect the browser for the result.")
         case "search_mail":
             overlay.hide()
-            try await MailSearchExecutor(onTarget: { [weak self] node, label in
+            try await MailSearchExecutor(selectedWindow: selectedWindow, onTarget: { [weak self] node, label in
                 guard let self else { return }
-                overlay.show(rect: frame(node), label: label, cursor: true)
+                showTarget(rect: frame(node), label: label, cursor: true)
             }).execute(try MailSearchRequest(query: action.value!))
             return .init(app: "com.apple.mail", message: "Verified Apple Mail search for ‘\(action.value!)’ across All Mailboxes. Existing sort order is unchanged. Results are visible in Mail; message bodies have not been read by this tool.")
         case "wait":
@@ -228,36 +257,38 @@ final class DesktopController: DesktopTools {
             throw failure("This app needs manual control, or the observed app changed. No action was taken.")
         }
         let foreground = NSWorkspace.shared.frontmostApplication
-        guard foreground?.processIdentifier == observedForeground || foreground?.processIdentifier == pid || foreground?.bundleIdentifier == Bundle.main.bundleIdentifier else {
+        guard selectedWindow != nil || foreground?.processIdentifier == observedForeground || foreground?.processIdentifier == pid || foreground?.bundleIdentifier == Bundle.main.bundleIdentifier else {
             throw failure("You switched apps while Brian was thinking. Stopped before acting.")
         }
         let root = AXUIElementCreateApplication(pid)
         if let windowReference {
             let windows = attribute(root, kAXWindowsAttribute) as? [AXUIElement] ?? []
             guard windows.contains(where: { CFEqual($0, windowReference) }) else { throw failure("The observed window closed. Stopped before acting.") }
-            if let main = element(root, kAXFocusedWindowAttribute) ?? element(root, kAXMainWindowAttribute), !CFEqual(main, windowReference) {
+            if selectedWindow == nil, let main = element(root, kAXFocusedWindowAttribute) ?? element(root, kAXMainWindowAttribute), !CFEqual(main, windowReference) {
                 throw failure("The active document changed while Brian was thinking. No action was taken.")
             }
         }
-        app.activate(options: [])
-        try await Task.sleep(for: .milliseconds(150))
-        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { throw failure("The target app lost focus. No action was taken.") }
+        if selectedWindow == nil {
+            app.activate(options: [])
+            try await Task.sleep(for: .milliseconds(150))
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { throw failure("The target app lost focus. No action was taken.") }
+        }
         if action.kind == "vision_observe" {
-            overlay.show(rect: windowReference.flatMap { frame($0) }, label: "Inspecting the window", vision: true)
+            showTarget(rect: windowReference.flatMap { frame($0) }, label: "Inspecting the window", vision: true)
             pendingSnapshot = try await vision.observe(pid: pid, expectedFrame: windowReference.flatMap { frame($0) })
             return .init(app: observation.app, message: "Captured the current window because: \(action.message!). Prefer any usable Accessibility controls; use this image only for the missing parts.")
         }
         if action.kind == "vision_click" || action.kind == "vision_scroll" {
             let point = try await vision.validatedPoint(action, pid: pid, checkFrontWindow: windowReference == nil)
-            overlay.show(rect: CGRect(x: point.x - 12, y: point.y - 12, width: 24, height: 24),
+            showTarget(rect: CGRect(x: point.x - 12, y: point.y - 12, width: 24, height: 24),
                 label: action.kind == "vision_click" ? action.message! : "Scroll \(action.message!)", cursor: true, vision: true)
             try await Task.sleep(for: .milliseconds(300))
             try Task.checkCancellation()
-            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { throw failure("You switched apps. No visual action was taken.") }
+            guard selectedWindow != nil || NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { throw failure("You switched apps. No visual action was taken.") }
             // Revalidate after the preview as well; input is sent to the same PID.
             let currentPoint = try await vision.validatedPoint(action, pid: pid, checkFrontWindow: windowReference == nil)
-            guard point == currentPoint, NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { throw failure("The target moved or focus changed. No action was taken.") }
-            if let windowReference {
+            guard point == currentPoint, selectedWindow != nil || NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { throw failure("The target moved or focus changed. No action was taken.") }
+            if selectedWindow == nil, let windowReference {
                 guard let focused = element(root, kAXFocusedWindowAttribute) ?? element(root, kAXMainWindowAttribute),
                       CFEqual(focused, windowReference) else { throw failure("The focused document changed. No visual action was taken.") }
             }
@@ -270,7 +301,7 @@ final class DesktopController: DesktopTools {
                     var hitPID: pid_t = 0
                     var names: CFArray?
                     AXUIElementGetPid(hit, &hitPID); AXUIElementCopyActionNames(hit, &names)
-                    if hitPID == pid, let hitFrame = frame(hit), hitFrame.contains(point), attribute(hit, kAXEnabledAttribute) as? Bool != false,
+                    if hitPID == pid, selectedWindow?.contains(hit) != false, let hitFrame = frame(hit), hitFrame.contains(point), attribute(hit, kAXEnabledAttribute) as? Bool != false,
                        let operation = (names as? [String] ?? []).first(where: { [kAXPressAction, kAXPickAction, kAXShowMenuAction].contains($0) }) {
                         let hitRole = string(hit, kAXSubroleAttribute)
                         let hitLabel = string(hit, kAXTitleAttribute).isEmpty ? string(hit, kAXDescriptionAttribute) : string(hit, kAXTitleAttribute)
@@ -278,7 +309,7 @@ final class DesktopController: DesktopTools {
                            !["close", "minimize", "maximize", "zoom"].contains(where: { action.message!.lowercased().contains($0) }) {
                             throw failure("The visual point reached a window control instead of the requested target. Stopped before clicking.")
                         }
-                        overlay.show(rect: hitFrame, label: "Clicking \(hitLabel.isEmpty ? action.message! : hitLabel)", cursor: true)
+                        showTarget(rect: hitFrame, label: "Clicking \(hitLabel.isEmpty ? action.message! : hitLabel)", cursor: true)
                         guard AXUIElementPerformAction(hit, operation as CFString) == .success else { throw failure("The visually located Accessibility action failed. Review the app before retrying.") }
                         vision.clear()
                         try await Task.sleep(for: .milliseconds(250))
@@ -303,7 +334,7 @@ final class DesktopController: DesktopTools {
         }
         if action.kind == "key" {
             let focus = element(root, kAXFocusedUIElementAttribute)
-            overlay.show(rect: focus.flatMap { frame($0) } ?? windowReference.flatMap { frame($0) }, label: "Key \(action.value!)", cursor: focus != nil)
+            showTarget(rect: focus.flatMap { frame($0) } ?? windowReference.flatMap { frame($0) }, label: "Key \(action.value!)", cursor: focus != nil)
             try await Task.sleep(for: .milliseconds(300))
             try sendKey(action.value!, app: app)
             try await Task.sleep(for: .milliseconds(250))
@@ -313,15 +344,20 @@ final class DesktopController: DesktopTools {
               string(node, kAXRoleAttribute) == prior.role,
               String(string(node, kAXValueAttribute).prefix(valueLimit(prior.role))) == prior.value,
               attribute(node, kAXEnabledAttribute) as? Bool != false else { throw failure("The target changed while Brian was thinking. No action was taken.") }
+        if let selectedWindow {
+            try selectedWindow.validate()
+            guard selectedWindow.contains(node) else { throw failure("The control is outside the selected window.") }
+        }
         // Labels are checked separately from the menu path added to model context.
         let label = displayLabel(node)
         guard prior.label.hasSuffix(String(label.prefix(180))) || prior.label == String(label.prefix(180)) else {
             throw failure("The target label changed. No action was taken.")
         }
-        overlay.show(rect: frame(node), label: "\(action.kind == "set_text" ? "Typing in" : action.kind == "scroll" ? "Scrolling" : action.kind == "read" ? "Reading" : action.kind == "select" ? "Selecting" : "Clicking") \(prior.label.isEmpty ? prior.role : prior.label)", cursor: true)
+        showTarget(rect: frame(node), label: "\(action.kind == "set_text" ? "Typing in" : action.kind == "scroll" ? "Scrolling" : action.kind == "read" ? "Reading" : action.kind == "select" ? "Selecting" : "Clicking") \(prior.label.isEmpty ? prior.role : prior.label)", cursor: true)
         try await Task.sleep(for: .milliseconds(300))
         try Task.checkCancellation()
-        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { throw failure("You switched apps before the action. Stopped.") }
+        try selectedWindow?.validate()
+        guard selectedWindow != nil || NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { throw failure("You switched apps before the action. Stopped.") }
         switch action.kind {
         case "read":
             inspectionRoot = (pid, documentReadRoot(node))
@@ -378,15 +414,19 @@ final class DesktopController: DesktopTools {
             }
             try await Task.sleep(for: .milliseconds(350))
         case "press":
+            if selectedWindow != nil, prior.role == "AXLink" { throw failure("This link may open another app. Use Mac mode to follow it.") }
             var names: CFArray?
             AXUIElementCopyActionNames(node, &names)
             guard let operation = (names as? [String] ?? []).first(where: { [kAXPressAction, kAXPickAction, kAXShowMenuAction].contains($0) }),
                   AXUIElementPerformAction(node, operation as CFString) == .success else { throw failure("That control could not be pressed.") }
         case "set_text":
             let text = action.value!
+            if selectedWindow == nil {
             guard AXUIElementSetAttributeValue(node, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success,
                   let focused = element(root, kAXFocusedUIElementAttribute), CFEqual(focused, node) else { throw failure("Could not focus the intended text field.") }
+            }
             if AXUIElementSetAttributeValue(node, kAXValueAttribute as CFString, text as CFString) != .success || string(node, kAXValueAttribute) != text {
+                if selectedWindow != nil { throw failure("This field needs foreground typing. Choose Mac mode to continue; Brian has not sent keyboard input.") }
                 // Native text controls sometimes expose setters but require keys.
                 try sendKey("cmd+a", app: app)
                 try sendKeyCode(51, flags: [], app: app)
@@ -467,7 +507,7 @@ final class DesktopController: DesktopTools {
         return fields.count == keys.count ? fields : nil
     }
     private func freshMailRows(_ root: AXUIElement) -> [AXUIElement] {
-        guard let window = element(root, kAXFocusedWindowAttribute) ?? element(root, kAXMainWindowAttribute) else { return [] }
+        guard let window = selectedWindow?.window ?? element(root, kAXFocusedWindowAttribute) ?? element(root, kAXMainWindowAttribute) else { return [] }
         var queue = [window]
         var index = 0
         while index < queue.count, index < 120 {
@@ -483,10 +523,10 @@ final class DesktopController: DesktopTools {
     }
 
     private func clickMailRow(_ identity: [String: String], root: AXUIElement, pid: pid_t) -> Bool {
-        guard let window = element(root, kAXFocusedWindowAttribute) ?? element(root, kAXMainWindowAttribute) else { return false }
+        guard let window = selectedWindow?.window ?? element(root, kAXFocusedWindowAttribute) ?? element(root, kAXMainWindowAttribute) else { return false }
         for row in freshMailRows(root) where mailRowIdentity(row) == identity {
-            if AXWindowClick.click(row, root: root, window: window, pid: pid, matches: { string($0, kAXRoleAttribute) == kAXRowRole && mailRowIdentity($0) == identity }) {
-                overlay.show(rect: frame(row), label: "Opening message", cursor: true)
+            if AXWindowClick.click(row, root: root, window: window, pid: pid, background: selectedWindow != nil, matches: { string($0, kAXRoleAttribute) == kAXRowRole && mailRowIdentity($0) == identity }) {
+                showTarget(rect: frame(row), label: "Opening message", cursor: true)
                 return true
             }
         }
@@ -521,7 +561,8 @@ final class DesktopController: DesktopTools {
     }
     private func sendKeyCode(_ code: CGKeyCode, flags: CGEventFlags, app: NSRunningApplication) throws {
         try Task.checkCancellation()
-        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
+        if let selectedWindow { try selectedWindow.validateKeyboard() }
+        guard selectedWindow != nil || NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
               let down = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true),
               let up = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false) else { throw failure("The target app lost keyboard focus.") }
         down.flags = flags; up.flags = flags

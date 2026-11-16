@@ -24,3 +24,10 @@ context = dict(clock, observation={'app':'com.apple.mail','name':'Mail','window'
 action = p.predict('Find my flight tomorrow in my emails', context)
 print('Candidate triage:', action, flush=True)
 assert action == {'kind':'select','target':'e2'}
+
+context = dict(clock, conversation=[{'role':'user','content':'Find my flights tomorrow in email'},
+    {'role':'assistant','content':'Found flights on November 16, 2026'}])
+plan = p.goal('help me find my invoice sent to AOGB', context)['mail_search']
+print('Undated invoice after dated flight task:', plan, flush=True)
+assert plan and plan['date'] is None and plan['date_scope'] == 'none' and plan['date_variants'] == []
+assert all('Nov' not in q and '16' not in q for q in plan['queries'])

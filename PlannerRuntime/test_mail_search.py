@@ -5,6 +5,24 @@ class SearchPlanTests(unittest.TestCase):
     clock = {'request_started':'2026-11-15T12:00:00Z','time_zone':'Asia/Singapore'}
     def draft(self, **updates):
         return dict({'topics':['flight','itinerary','booking confirmation'], 'date':'tomorrow', 'date_scope':'event', 'literal':False}, **updates)
+    def test_undated_invoice_does_not_inherit_flight_dates(self):
+        context = dict(self.clock, request='help me find my invoice sent to AOGB', conversation=[
+            {'role':'user','content':'Find flights tomorrow'}, {'role':'assistant','content':'Found a flight on November 16'}])
+        plan = compile_search(self.draft(topics=['invoice Nov 16', 'AOGB'], date='2026-11-16'), context)
+        self.assertIsNone(plan['date'])
+        self.assertEqual(plan['date_scope'], 'none')
+        self.assertEqual(plan['date_variants'], [])
+        self.assertEqual(plan['queries'], ['invoice', 'AOGB'])
+    def test_explicit_date_and_date_followup_remain_supported(self):
+        for task in ['Find flights tmr', 'Find invoices for November 16', 'Find invoices for 16 Nov', 'Find invoices for 2026-11-16', 'Find invoices for 16/11/2026']:
+            self.assertEqual(compile_search(self.draft(date='2026-11-16'), dict(self.clock, request=task))['date'], '2026-11-16')
+        context = dict(self.clock, request='Find invoices for that day', conversation=[{'role':'user','content':'Find flights tomorrow'}])
+        self.assertIsNotNone(compile_search(self.draft(), context)['date'])
+    def test_fresh_requests_do_not_receive_old_search_context(self):
+        from mail_search import search_context
+        context = {'conversation':[{'role':'user','content':'Find flights tomorrow'}]}
+        self.assertEqual(search_context('help me find my invoice sent to AOGB', context)['conversation'], [])
+        self.assertEqual(search_context('Find invoices for that day', context)['conversation'], context['conversation'])
     def test_tomorrow_aliases_and_date_combinations(self):
         for word in ('tomorrow','tmr','tmrw'):
             plan = compile_search(self.draft(date=word), self.clock)

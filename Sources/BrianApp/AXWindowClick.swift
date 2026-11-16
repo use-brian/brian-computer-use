@@ -5,8 +5,8 @@ import BrianCore
 /// Uses semantic AX identity plus a current hit test; never model-generated coordinates.
 enum AXWindowClick {
     static func click(_ node: AXUIElement, root: AXUIElement, window: AXUIElement, pid: pid_t,
-                      matches: (AXUIElement) -> Bool) -> Bool {
-        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid, matches(node),
+                      background: Bool = false, matches: (AXUIElement) -> Bool) -> Bool {
+        guard background || NSWorkspace.shared.frontmostApplication?.processIdentifier == pid, matches(node),
               let windowFrame = frame(window), let targetFrame = frame(node), windowFrame.contains(targetFrame),
               let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return false }
         let candidates = windows.filter { info in
@@ -26,7 +26,7 @@ enum AXWindowClick {
             hit = (parent as! AXUIElement)
         }
         guard verified, matches(node), frame(node) == targetFrame,
-              NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
+              background || NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
               let down = WindowPointerEvent.click(point: point, windowFrame: windowFrame, windowNumber: number, down: true),
               let up = WindowPointerEvent.click(point: point, windowFrame: windowFrame, windowNumber: number, down: false) else { return false }
         down.postToPid(pid); up.postToPid(pid)

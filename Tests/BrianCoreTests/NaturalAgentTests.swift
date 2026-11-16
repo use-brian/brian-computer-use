@@ -57,6 +57,25 @@ private actor ScriptedPlanner: LanguagePlanner {
 }
 
 @MainActor final class NaturalAgentTests: XCTestCase {
+    func testWindowScopeRejectsMailDetourBeforeExecution() async throws {
+        let planner = ScriptedPlanner([.init(kind: "search_mail", value: "flight")])
+        let desktop = FakeDesktop()
+        do {
+            _ = try await NaturalAgent(planner: planner, tools: desktop).run(task: "Find a flight email", app: "test.app", conversation: [],
+                scope: .init(app: "test.app", title: "Selected"), approve: { _ in true }, onEvent: { _ in })
+            XCTFail("A scoped task must not switch to Mail")
+        } catch { XCTAssertTrue(desktop.executed.isEmpty) }
+    }
+    func testWindowScopeContextAndLocalActions() async throws {
+        let planner = ScriptedPlanner([.init(kind: "press", target: "e0"), .init(kind: "done", message: "Verified")])
+        let desktop = FakeDesktop()
+        let result = try await NaturalAgent(planner: planner, tools: desktop).run(task: "Press this", app: "other.app", conversation: [],
+            scope: .init(app: "test.app", title: "Selected"), approve: { _ in true }, onEvent: { _ in })
+        XCTAssertFalse(result.needsInput)
+        let contexts = await planner.captured()
+        XCTAssertEqual(contexts[0]["execution_scope"]["app"].string, "test.app")
+        XCTAssertEqual(contexts[0]["installed_applications"].array.count, 1)
+    }
     func testDatedMailReplyUsesObservedExcerptInsteadOfInventedSummary() async throws {
         let text = "ExampleAir QX201 · Departure 16 Nov 2026 · TPE 20:15"
         let plan = MailSearchPlan(topics: ["flight"], date: "2026-11-16", dateScope: "event", dateVariants: ["16 Nov"], queries: ["flight Nov 16"])

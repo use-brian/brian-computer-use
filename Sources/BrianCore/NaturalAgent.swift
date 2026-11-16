@@ -162,11 +162,11 @@ public struct NaturalResult: Sendable {
     public init(planner: any LanguagePlanner, tools: any DesktopTools, maxSteps: Int = 32) {
         self.planner = planner; self.tools = tools; self.maxSteps = maxSteps
     }
-    public func run(task: String, app: String?, conversation: [ConversationTurn],
+    public func run(task: String, app: String?, conversation: [ConversationTurn], scope: WindowScope? = nil,
                     approve: (String) async -> Bool,
                     onEvent: (String) -> Void) async throws -> NaturalResult {
         guard !task.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, task.count <= 12000 else { throw AgentError.invalidTask }
-        var activeApp = app
+        var activeApp = scope?.app ?? app
         var history: [JSONValue] = []
         var attempts: [(PlannerAction, DesktopObservation)] = []
         var inspections = 0
@@ -179,6 +179,7 @@ public struct NaturalResult: Sendable {
         onEvent("Understanding what needs to be verified…")
         let goal = try await planner.goal(task: task, context: .object([
             "conversation": try json(Array(conversation.suffix(6))),
+            "execution_scope": try json(scope),
             "current_date": .string(started), "time_zone": .string(zone),
         ]))
         try goal.validate()
@@ -198,7 +199,9 @@ public struct NaturalResult: Sendable {
             mailSearch.observe(observation)
             let observationID = record(observation)
             let context: JSONValue = .object([
-                "installed_applications": try json(tools.applications),
+                "installed_applications": try json(tools.applications.filter { scope == nil || $0.id == scope?.app }),
+                "execution_scope": try json(scope),
+                "scope_instructions": .string(scope == nil ? "Mac mode" : "Operate only inside the selected app window, in the background. Do not open other apps, URLs, windows, menus, or use the clipboard. Read, press, select, set_text, accessible scroll, and vision inspection/click can target this window. If the request needs another app or unsupported foreground input, ask the user to change the target mode."),
                 "observation": try json(observation),
                 "conversation": try json(Array(conversation.suffix(6))),
                 "history": .array(Array(history.suffix(12))),
@@ -236,6 +239,7 @@ public struct NaturalResult: Sendable {
                 action = .init(kind: "search_mail", value: next)
             }
             try Task.checkCancellation()
+            try scope?.validate(action)
             try action.validate(observation: observation, apps: tools.applications)
             if action.kind == "ask" {
                 return NaturalResult(message: action.message!, needsInput: true, steps: step)
@@ -307,6 +311,7 @@ public struct NaturalResult: Sendable {
                 try Task.checkCancellation()
             }
             onEvent(action.activity(in: observation))
+            try scope?.validate(action)
             let result: DesktopToolResult
             do {
                 result = try await tools.execute(action, observation: observation)
@@ -314,13 +319,15 @@ public struct NaturalResult: Sendable {
                 // Unknown failures/partial edits deliberately escape this catch.
                 onEvent("Looking at \(observation.name)…")
                 let fallback = PlannerAction(kind: "vision_observe", message: reason)
+                try scope?.validate(fallback)
                 result = try await tools.execute(fallback, observation: observation)
                 history.append(.object(["action": try json(action), "result": .string("Accessibility unavailable before dispatch: " + reason)]))
                 action = fallback
             }
             try Task.checkCancellation()
             if action.kind == "search_mail", let query = action.value { mailSearch.searched(query) }
-            activeApp = result.app ?? activeApp
+            if let scope, let resultApp = result.app, resultApp != scope.app { throw AgentError.runtime("The action left the selected app. Stopped.") }
+            activeApp = scope?.app ?? result.app ?? activeApp
             history.append(.object(["action": try json(action), "result": .string(String(result.message.prefix(1500)))]))
         }
         return NaturalResult(message: "I reached the action limit before verifying the full request. " + (feedback.isEmpty ? "Review the current result before continuing." : feedback), needsInput: true, steps: maxSteps)

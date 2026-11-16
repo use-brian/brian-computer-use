@@ -6,16 +6,23 @@ import BrianCore
 /// composes, sends, deletes, or interprets email contents as instructions.
 @MainActor
 struct MailSearchExecutor {
+    var selectedWindow: SelectedWindow?
     var onTarget: ((AXUIElement, String) -> Void)?
     func execute(_ request: MailSearchRequest) async throws {
         guard AXIsProcessTrusted() else { throw AgentError.accessibility }
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.mail") else {
             throw failure("Apple Mail isn’t installed.")
         }
-        let app = try await NSWorkspace.shared.openApplication(at: url, configuration: .init())
+        let app: NSRunningApplication
+        if let selectedWindow {
+            try selectedWindow.validate()
+            guard selectedWindow.app == "com.apple.mail", let running = NSRunningApplication(processIdentifier: selectedWindow.pid) else { throw failure("Select a Mail window first.") }
+            app = running
+        } else { app = try await NSWorkspace.shared.openApplication(at: url, configuration: .init()) }
         let root = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(root, 1)
         let window = try await waitFor {
+            if let selectedWindow { return selectedWindow.window }
             let viewers = (attribute(root, kAXWindowsAttribute) as? [AXUIElement] ?? []).filter {
                 string($0, kAXIdentifierAttribute).hasPrefix("Mail.messageViewer.window.")
             }
@@ -28,11 +35,13 @@ struct MailSearchExecutor {
                 ?? (viewers.count == 1 ? viewers[0] : nil)
         }
         try Task.checkCancellation()
+        if selectedWindow == nil {
         guard AXUIElementPerformAction(window, kAXRaiseAction as CFString) == .success else {
             throw failure("Could not bring the intended Mail window forward.")
         }
         app.activate(options: [])
         try await Task.sleep(for: .milliseconds(200))
+        }
         guard let toolbar = find(window, matching: { string($0, kAXRoleAttribute) == kAXToolbarRole }),
               let field = find(toolbar, matching: {
                   string($0, kAXSubroleAttribute) == "AXSearchField" || string($0, kAXRoleAttribute) == "AXSearchField"
@@ -61,9 +70,10 @@ struct MailSearchExecutor {
         for chunk in chunks {
             try Task.checkCancellation()
             guard let focus = attribute(root, kAXFocusedUIElementAttribute), CFEqual(focus, field),
-                  NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else {
+                  selectedWindow != nil || NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else {
                 throw failure("Mail’s search focus changed. Stopped before continuing.")
             }
+            if let selectedWindow { try selectedWindow.validateKeyboard() }
             let units = Array(chunk.utf16)
             guard let source = CGEventSource(stateID: .privateState),
                   let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
@@ -91,7 +101,7 @@ struct MailSearchExecutor {
         onTarget?(allMailboxes, "All Mailboxes")
         guard let outline = find(window, matching: { string($0, kAXIdentifierAttribute) == "MailboxesOutlineView" }),
               let freshScope = find(outline, matching: { string($0, kAXRoleAttribute) == kAXRowRole && named($0, "All Mailboxes") }),
-              AXWindowClick.click(freshScope, root: root, window: window, pid: app.processIdentifier,
+              AXWindowClick.click(freshScope, root: root, window: window, pid: app.processIdentifier, background: selectedWindow != nil,
                   matches: { string($0, kAXRoleAttribute) == kAXRowRole && named($0, "All Mailboxes") }) else {
             throw failure("Mail’s All Mailboxes control moved or is not visible. Please leave the search window in front.")
         }
@@ -107,7 +117,8 @@ struct MailSearchExecutor {
         let currentWindows = attribute(root, kAXWindowsAttribute) as? [AXUIElement] ?? []
         let main = attribute(root, kAXFocusedWindowAttribute).flatMap { focused in currentWindows.first { CFEqual($0, focused) } }
             ?? currentWindows.first { attribute($0, kAXMainAttribute) as? Bool == true }
-        guard main.map({ CFEqual($0, window) }) == true,
+        if let selectedWindow { try selectedWindow.validate() }
+        guard (selectedWindow != nil || main.map({ CFEqual($0, window) }) == true),
               string(field, kAXValueAttribute) == request.query else {
             throw failure("Mail opened the search, but its window or query changed before verification. Review its results.")
         }
@@ -154,7 +165,8 @@ struct MailSearchExecutor {
     }
     private func key(_ code: CGKeyCode, app: NSRunningApplication, flags: CGEventFlags = []) throws {
         try Task.checkCancellation()
-        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
+        if let selectedWindow { try selectedWindow.validateKeyboard() }
+        guard selectedWindow != nil || NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
               let source = CGEventSource(stateID: .privateState),
               let down = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: true),
               let up = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: false) else {

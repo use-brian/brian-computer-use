@@ -1,6 +1,6 @@
 """General language planning over local tools. No executable code is generated."""
 import json
-from mail_search import compile_search, SEARCH_INTENT, unselected_candidates, CANDIDATE_SELECTION, enforce_explicit_event_dates
+from mail_search import search_context, compile_search, SEARCH_INTENT, unselected_candidates, CANDIDATE_SELECTION, enforce_explicit_event_dates
 
 SYSTEM = '''You are Brian, a local macOS assistant. Understand the user's intent in ordinary language and choose ONE next tool call. You have memory of the current conversation, observations and prior tool results. Do not require command syntax. Resolve follow-ups using conversation history only when the current request actually refers back to it. The latest request overrides prior app choices and task scope. Previous assistant answers are not factual evidence. Never use a developer demo, fixture, or synthetic booking to answer a real-world request; use the requested real source, such as Apple Mail for the user's emails. If essential information is missing, ask one concise question. Never invent app controls, facts, email contents, or completed actions.
 
@@ -239,6 +239,7 @@ class Planner:
         # silently weaken the request or invent extra constraints. Decomposition
         # belongs in planning; completion is always judged against the full task.
         context = temporal_context(context)
+        context = search_context(task, context)
         search = self.structured(SEARCH_INTENT, {'request':task, 'local_today':context.get('local_today'),
             'conversation':context.get('conversation', [])[-4:]}, lambda draft: compile_search(draft, context),
             max_tokens=300, required_fields='topics, date, date_scope, literal')

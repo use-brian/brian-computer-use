@@ -1,8 +1,28 @@
 """Compile a model's semantic search intent into a bounded, reusable query plan."""
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
+import re
 
 MONTHS = ('January February March April May June July August September October November December').split()
+
+# The calendar and earlier tasks provide context, never permission to add a filter.
+DATE_MENTION = re.compile(r"\b(?:today|tomorrow|tmr|tmrw|yesterday|(?:next|last|this)\s+(?:day|week|month|year)|monday|tuesday|wednesday|thursday|friday|saturday|sunday|(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?|\d{1,2}(?:st|nd|rd|th)?\s+(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)|\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}(?:/\d{2,4})?)\b", re.I)
+DATE_BACKREFERENCE = re.compile(r"\b(?:same date|same day|that date|that day|then)\b", re.I)
+
+def date_is_requested(task, context):
+    if DATE_MENTION.search(task):
+        return True
+    return bool(DATE_BACKREFERENCE.search(task) and any(
+        turn.get('role') == 'user' and DATE_MENTION.search(turn.get('content', ''))
+        for turn in context.get('conversation', [])[-6:]))
+
+def search_context(task, context):
+    result = dict(context, request=task)
+    # Standalone requests must not inherit facts or search filters from old tasks.
+    if not re.search(r"\b(?:same|that|those|it|his|her|their|again|instead|also|then)\b", task, re.I):
+        result['conversation'] = []
+    return result
+
 
 def resolve_date(reference, context):
     if reference is None:
@@ -29,8 +49,14 @@ def compile_search(draft, context):
         raise ValueError('Invalid date_scope, literal flag or date.')
     if not topics:
         return None
+    grounded = 'request' not in context or date_is_requested(context['request'], context)
+    if not grounded and not draft['literal']:
+        topics = [DATE_MENTION.sub('', q).strip() for q in topics]
+        topics = [q for q in topics if q]
+        if not topics:
+            raise ValueError('The current request has no date. Extract its topic or sender without any dates.')
     topics = list(dict.fromkeys(' '.join(q.split()) for q in topics))
-    day = None if draft['literal'] else resolve_date(draft['date'], context)
+    day = None if draft['literal'] or not grounded else resolve_date(draft['date'], context)
     variants = date_variants(day) if day else []
     if variants:
         queries = [f'{topics[0]} {v}' for v in variants[:4]]
@@ -40,12 +66,12 @@ def compile_search(draft, context):
     else:
         queries = topics
     queries = list(dict.fromkeys(queries))[:14]
-    return {'topics':topics, 'date':day.isoformat() if day else None, 'date_scope':draft['date_scope'],
+    return {'topics':topics, 'date':day.isoformat() if day else None, 'date_scope':draft['date_scope'] if day else 'none',
             'date_variants':list(dict.fromkeys(variants)), 'queries':queries, 'literal':draft['literal']}
 
 SEARCH_INTENT = '''Extract an email-search intent from the CURRENT user request. Return only JSON with exactly:
 {"topics":["flight","itinerary","booking confirmation"],"date":"tomorrow","date_scope":"event","literal":false}
-Use topics=[] for tasks not asking to find/read/search email. For email tasks, topics are one to three SHORT content or sender phrases, without dates or filler like help/find/my/email. Do not invent a sender. Keep dates SEPARATE: use today/tomorrow/yesterday, an explicit YYYY-MM-DD, or null. tmr and tmrw mean tomorrow. Dates of flights, meetings, deliveries, etc. are event dates; the date an email arrived is received. No date means date_scope=none. Use the supplied local calendar to resolve explicit month/day to an ISO date. Never change the original goal.
+Use topics=[] for tasks not asking to find/read/search email. For email tasks, topics are one to three SHORT content or sender phrases, without dates or filler like help/find/my/email. Do not invent a sender. Keep dates SEPARATE: use today/tomorrow/yesterday, an explicit YYYY-MM-DD, or null. tmr and tmrw mean tomorrow. Dates of flights, meetings, deliveries, etc. are event dates; the date an email arrived is received. No date in the CURRENT request means date=null and date_scope=none, even if prior messages or local_today contain dates. Use a prior date only for an explicit reference such as same date or that day. Never assume every email search is about today. Use the supplied local calendar to resolve explicit month/day to an ISO date. Never change the original goal.
 literal=true ONLY when the user explicitly asks to search an exact quoted phrase; preserve that phrase and use date=null. A normal request to search for flights tomorrow is NOT a literal phrase search.
 Examples:
 "can you help me search for flights tomorrow at email" -> {"topics":["flight","itinerary","booking confirmation"],"date":"tomorrow","date_scope":"event","literal":false}

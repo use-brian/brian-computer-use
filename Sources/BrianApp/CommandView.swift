@@ -15,6 +15,17 @@ struct CommandView: View {
             BrianAvatar(mood: model.isRunning ? .working : model.isFinished ? .happy : .idle,
                         animated: model.isRunning)
                 .frame(width: 28, height: 28)
+            Menu {
+                Button("Mac — across apps") { model.selectedWindowID = nil }
+                ForEach(model.windows) { window in
+                    Button("\(window.name) — \(window.title.isEmpty ? "Untitled window" : window.title)") { model.selectedWindowID = window.id }
+                }
+            } label: {
+                Text(model.targetLabel).font(.system(size: 11, weight: .medium)).lineLimit(1).frame(maxWidth: 80)
+            }
+            .menuStyle(.borderlessButton).fixedSize().disabled(model.isRunning)
+            .help(model.selectedWindow.map { "Only this window: " + $0.title + ". You can use other apps while Brian works." } ?? "Choose a window to work in the background")
+            .accessibilityLabel("Work in")
             if model.isRunning {
                 Text(model.pendingConfirmation == nil ? model.status : "Waiting for your confirmation…")
                     .font(.system(size: 18)).foregroundStyle(.secondary).lineLimit(1)
@@ -82,7 +93,7 @@ struct CommandView: View {
         .onChange(of: model.focusToken) { inputFocused = true }
         .onChange(of: model.isRunning) {
             if model.isRunning { showingFeedback = false }
-            if !model.isRunning { inputFocused = true }
+            if !model.isRunning, model.selectedWindow == nil { inputFocused = true }
         }
         .onChange(of: model.responseVersion) { showingFeedback = false }
         .onChange(of: model.pendingConfirmation) { showingFeedback = model.pendingConfirmation != nil }
