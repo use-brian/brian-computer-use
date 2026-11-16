@@ -1,0 +1,4 @@
+# Installed into .runtime-build/embedding-deps, not the research environment.
+# numpy, packaging and protobuf are already supplied by the MLX planner runtime.
+onnxruntime==1.23.2
+flatbuffers==25.9.23

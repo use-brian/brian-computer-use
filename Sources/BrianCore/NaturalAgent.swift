@@ -129,9 +129,13 @@ public struct PlannerAction: Codable, Sendable, Equatable {
 public enum DesktopRecoveryError: Error { case accessibilityUnavailable(String) }
 
 public protocol LanguagePlanner: Sendable {
+    func memory(taskID: String, event: String, context: JSONValue) async throws
     func goal(task: String, context: JSONValue) async throws -> TaskGoal
     func assess(task: String, context: JSONValue) async throws -> CompletionAssessment
     func plan(task: String, context: JSONValue) async throws -> PlannerAction
+}
+public extension LanguagePlanner {
+    func memory(taskID: String, event: String, context: JSONValue) async throws {}
 }
 public struct DesktopToolResult: Sendable {
     public let app: String?
@@ -168,6 +172,23 @@ public struct NaturalResult: Sendable {
     public func run(task: String, app: String?, conversation: [ConversationTurn], scope: WindowScope? = nil,
                     approve: (String) async -> Bool,
                     onEvent: (String) -> Void) async throws -> NaturalResult {
+        let taskID = UUID().uuidString
+        do {
+            let result = try await runTask(task: task, app: app, conversation: conversation, scope: scope,
+                                           taskID: taskID, approve: approve, onEvent: onEvent)
+            try? await planner.memory(taskID: taskID, event: result.needsInput ? "needs_input" : "complete",
+                context: .object(["result": .string(result.message), "steps": .number(result.steps)]))
+            return result
+        } catch {
+            // A failed/cancelled task never promotes a procedure. Its latest checkpoint remains inspectable.
+            try? await planner.memory(taskID: taskID, event: error is CancellationError ? "cancelled" : "failed",
+                                      context: .object(["result": .string(String(error.localizedDescription.prefix(2000)))]))
+            throw error
+        }
+    }
+    private func runTask(task: String, app: String?, conversation: [ConversationTurn], scope: WindowScope?,
+                         taskID: String, approve: (String) async -> Bool,
+                         onEvent: (String) -> Void) async throws -> NaturalResult {
         guard !task.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, task.count <= 12000 else { throw AgentError.invalidTask }
         var activeApp = scope?.app ?? app
         var history: [JSONValue] = []
@@ -181,6 +202,7 @@ public struct NaturalResult: Sendable {
         let zone = TimeZone.current.identifier
         onEvent("Understanding what needs to be verified…")
         let goal = try await planner.goal(task: task, context: .object([
+            "task_id": .string(taskID),
             "conversation": try json(Array(conversation.suffix(6))),
             "execution_scope": try json(scope),
             "current_date": .string(started), "time_zone": .string(zone),
@@ -201,11 +223,16 @@ public struct NaturalResult: Sendable {
             let observation = try await tools.observe(app: activeApp)
             mailSearch.observe(observation)
             let observationID = record(observation)
+            try? await planner.memory(taskID: taskID, event: "checkpoint", context: .object([
+                "goal": try json(goal), "history": .array(history), "evidence": try json(evidence),
+                "mail_search": try json(mailSearch), "app": .string(observation.app),
+            ]))
             let context: JSONValue = .object([
                 "installed_applications": try json(tools.applications.filter { scope == nil || $0.id == scope?.app }),
                 "execution_scope": try json(scope),
                 "scope_instructions": .string(scope == nil ? tools.planningInstructions : "Operate only inside the selected app window, in the background. Do not open other apps, URLs, windows, menus, or use the clipboard. Read, press, select, set_text, accessible scroll, and vision inspection/click can target this window. If the request needs another app or unsupported foreground input, ask the user to change the target mode."),
                 "observation": try json(observation),
+                "task_id": .string(taskID),
                 "conversation": try json(Array(conversation.suffix(6))),
                 "history": .array(Array(history.suffix(12))),
                 "goal": try json(goal), "evidence": try json(evidence),
@@ -262,6 +289,7 @@ public struct NaturalResult: Sendable {
                     "reply_mode": .string(excerptReply ? "excerpt" : "summary"),
                     "evidence": try json(evidence), "current_observation_id": .string(currentID),
                     "observation": try json(fresh), "history": .array(Array(history.suffix(12))),
+                    "task_id": .string(taskID),
                     "conversation": try json(Array(conversation.suffix(6))),
                     "current_date": .string(ISO8601DateFormatter().string(from: Date())),
                     "request_started": .string(started), "time_zone": .string(zone),
@@ -270,6 +298,10 @@ public struct NaturalResult: Sendable {
                 let accepted = assessment.accepts(goal: goal, evidence: evidence, currentID: currentID)
                 let excerpt = goal.mail_search.flatMap { VerifiedMailReply.render(plan: $0, assessment: assessment, evidence: evidence) }
                 if accepted, !excerptReply || excerpt != nil {
+                    try? await planner.memory(taskID: taskID, event: "checkpoint", context: .object([
+                        "goal": try json(goal), "history": .array(history), "evidence": try json(evidence),
+                        "mail_search": try json(mailSearch), "app": .string(fresh.app),
+                    ]))
                     return NaturalResult(message: excerptReply ? excerpt! : action.message!, needsInput: false, steps: step)
                 }
                 feedback = accepted && excerptReply
@@ -316,6 +348,11 @@ public struct NaturalResult: Sendable {
             onEvent(action.activity(in: observation))
             try scope?.validate(action)
             let result: DesktopToolResult
+            try? await planner.memory(taskID: taskID, event: "checkpoint", context: .object([
+                "goal": try json(goal), "history": .array(history), "evidence": try json(evidence),
+                "mail_search": try json(mailSearch), "app": .string(observation.app),
+                "pending_action": try json(action),
+            ]))
             do {
                 result = try await tools.execute(action, observation: observation)
             } catch DesktopRecoveryError.accessibilityUnavailable(let reason) {
@@ -324,14 +361,18 @@ public struct NaturalResult: Sendable {
                 let fallback = PlannerAction(kind: "vision_observe", message: reason)
                 try scope?.validate(fallback)
                 result = try await tools.execute(fallback, observation: observation)
-                history.append(.object(["action": try json(action), "result": .string("Accessibility unavailable before dispatch: " + reason)]))
+                history.append(.object(["app": .string(observation.app), "action": try json(action), "result": .string("Accessibility unavailable before dispatch: " + reason)]))
                 action = fallback
             }
             try Task.checkCancellation()
             if action.kind == "search_mail", let query = action.value { mailSearch.searched(query) }
             if let scope, let resultApp = result.app, resultApp != scope.app { throw AgentError.runtime("The action left the selected app. Stopped.") }
             activeApp = scope?.app ?? result.app ?? activeApp
-            history.append(.object(["action": try json(action), "result": .string(String(result.message.prefix(1500)))]))
+            history.append(.object(["app": .string(observation.app), "action": try json(action), "result": .string(String(result.message.prefix(1500)))]))
+            try? await planner.memory(taskID: taskID, event: "checkpoint", context: .object([
+                "goal": try json(goal), "history": .array(history), "evidence": try json(evidence),
+                "mail_search": try json(mailSearch), "app": .string(activeApp ?? observation.app),
+            ]))
         }
         return NaturalResult(message: "I reached the action limit before verifying the full request. " + (feedback.isEmpty ? "Review the current result before continuing." : feedback), needsInput: true, steps: maxSteps)
     }

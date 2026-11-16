@@ -23,6 +23,7 @@ if [ "$shell_only" = false ]; then
   fi
   for resource in mac-control _internal resources/planner-version.json resources/build/mac-ax resources/configs/decision-weights.json \
     resources/models/qwen3.5-4b-4bit/model.safetensors resources/models/qwen3.5-4b-4bit/tokenizer.json \
+    resources/models/bge-small-en-v1.5/manifest.json resources/models/bge-small-en-v1.5/onnx/model.onnx \
     resources/adapters/mac-ax-bootstrap-v0/adapters.safetensors resources/adapters/mac-ax-bootstrap-v0/adapter_config.json; do
     test -e "$runtime_bundle/$resource" || { printf 'Missing runtime resource: %s\n' "$resource" >&2; exit 2; }
   done

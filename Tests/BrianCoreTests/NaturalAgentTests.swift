@@ -6,6 +6,11 @@ private actor ScriptedPlanner: LanguagePlanner {
     var actions: [PlannerAction]
     var contexts: [JSONValue] = []
     var reviews: [JSONValue] = []
+    var memoryFails = false
+    func disableMemory() { memoryFails = true }
+    var memoryEvents: [(String, String, JSONValue)] = []
+    func memory(taskID: String, event: String, context: JSONValue) async throws { if memoryFails { throw AgentError.runtime("Memory unavailable") }; memoryEvents.append((taskID, event, context)) }
+    func capturedMemory() -> [(String, String, JSONValue)] { memoryEvents }
     var assessments: [CompletionAssessment]
     let mailPlan: MailSearchPlan?
     init(_ actions: [PlannerAction], assessments: [CompletionAssessment] = [], mailPlan: MailSearchPlan? = nil) { self.actions = actions; self.assessments = assessments; self.mailPlan = mailPlan }
@@ -75,6 +80,43 @@ private actor ScriptedPlanner: LanguagePlanner {
 }
 
 @MainActor final class NaturalAgentTests: XCTestCase {
+    func testMemoryCompletionRequiresAcceptedReviewAndCheckpointsActions() async throws {
+        let planner = ScriptedPlanner([.init(kind: "press", target: "e0"), .init(kind: "done", message: "Verified")])
+        _ = try await NaturalAgent(planner: planner, tools: FakeDesktop()).run(task: "Do the task", app: nil,
+            conversation: [], approve: { _ in true }, onEvent: { _ in })
+        let events = await planner.capturedMemory()
+        XCTAssertEqual(events.last?.1, "complete")
+        XCTAssertEqual(Set(events.map { $0.0 }).count, 1)
+        XCTAssertTrue(events.contains { $0.1 == "checkpoint" && !$0.2["history"].array.isEmpty })
+    }
+    func testOptionalMemoryFailureDoesNotFailVerifiedTask() async throws {
+        let planner = ScriptedPlanner([.init(kind: "press", target: "e0"), .init(kind: "done", message: "Verified")])
+        await planner.disableMemory()
+        let result = try await NaturalAgent(planner: planner, tools: FakeDesktop()).run(task: "Do the task", app: nil,
+            conversation: [], approve: { _ in true }, onEvent: { _ in })
+        XCTAssertFalse(result.needsInput)
+    }
+    func testAskingForInputDoesNotTeachCompletedProcedure() async throws {
+        let planner = ScriptedPlanner([.init(kind: "ask", message: "Which document?")])
+        let result = try await NaturalAgent(planner: planner, tools: FakeDesktop()).run(task: "Do the task", app: nil,
+            conversation: [], approve: { _ in true }, onEvent: { _ in })
+        XCTAssertTrue(result.needsInput)
+        let events = await planner.capturedMemory()
+        XCTAssertEqual(events.last?.1, "needs_input")
+        XCTAssertFalse(events.contains { $0.1 == "complete" })
+    }
+    func testFailedTaskDoesNotEmitMemoryCompletion() async throws {
+        let planner = ScriptedPlanner([.init(kind: "press", target: "e0")])
+        let desktop = FakeDesktop(); desktop.failExecution = true
+        do {
+            _ = try await NaturalAgent(planner: planner, tools: desktop).run(task: "Do the task", app: nil,
+                conversation: [], approve: { _ in true }, onEvent: { _ in })
+            XCTFail("Expected execution failure")
+        } catch {}
+        let events = await planner.capturedMemory()
+        XCTAssertEqual(events.last?.1, "failed")
+        XCTAssertFalse(events.contains { $0.1 == "complete" })
+    }
     func testAutomaticModeLetsPlannerChooseAnotherAppAndVerifyIt() async throws {
         let planner = ScriptedPlanner([.init(kind: "open_app", app: "second.app"),
                                        .init(kind: "press", target: "e0"), .init(kind: "done", message: "Verified")])

@@ -11,5 +11,12 @@
   "scope": "Experimental local language and vision planner; fresh AX targets preferred, visual targets grounded separately and revalidated before dispatch. No unrestricted shell.",
   "source": "llm-research/experiments/002-mac-accessibility",
   "planner": "Base Qwen3.5-4B instruction model; no LoRA applied for general planning",
-  "adapter_usage": "Preserved for legacy Finder/TextEdit research MCP tools; not the default planner"
+  "adapter_usage": "Preserved for legacy Finder/TextEdit research MCP tools; not the default planner",
+  "memory_embedding": {
+    "model": "BAAI/bge-small-en-v1.5",
+    "revision": "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a",
+    "runtime": "ONNX Runtime 1.23.2 CPU",
+    "dimensions": 384,
+    "query_language": "English via local Qwen; original exact terms retained for FTS5"
+  }
 }

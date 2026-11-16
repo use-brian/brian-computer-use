@@ -519,3 +519,15 @@ request automatically chose Mail and entered its control loop. The bar exposed
 only a read-only working-app label. The bounded check was stopped after routing
 verification, with the user's draft preserved; it was not a full invoice-answer
 evaluation.
+
+## Local memory (0.10.0)
+
+Brian now checkpoints tasks and retrieves verified, app-scoped procedures from
+`~/.brian/memory.sqlite`. Retrieval combines FTS5 with a bundled, pinned
+BAAI/bge-small-en-v1.5 embedding model. The local Qwen planner prepares English
+retrieval queries while preserving original names and identifiers. Task examples
+and source evidence stay out of reusable planner guidance; verified completion
+can reinforce a small curated procedure library.
+
+See [memory architecture, controls, build instructions and limits](docs/memory.md)
+and the [synthetic multilingual retrieval evaluation](docs/memory-evaluation.json).

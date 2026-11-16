@@ -1,0 +1,175 @@
+{
+  "model": "BAAI/bge-small-en-v1.5",
+  "revision": "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a",
+  "synthetic_only": true,
+  "cases": [
+    {
+      "language": "fr",
+      "request": "Retrouve le courriel contenant le reçu envoyé à ACME-42.",
+      "query": {
+        "english_query": "How to find the email containing the receipt sent to ACME-42.",
+        "task_type": "email_lookup",
+        "exact_terms": [
+          "ACME-42"
+        ]
+      },
+      "expected_task_type": "email_lookup",
+      "task_type_correct": true,
+      "source_terms_preserved": true,
+      "translation_terms_preserved": true,
+      "fts5_hits": 1,
+      "hybrid_hits": 1,
+      "retrieval_mode": "hybrid",
+      "old_details_excluded": true,
+      "seconds": 0.57
+    },
+    {
+      "language": "de",
+      "request": "Ändere die Überschrift im Dokument in \"Projekt AB-17\".",
+      "query": {
+        "english_query": "Change the document title to \"Projekt AB-17\".",
+        "task_type": "document_edit",
+        "exact_terms": [
+          "Projekt AB-17"
+        ]
+      },
+      "expected_task_type": "document_edit",
+      "task_type_correct": true,
+      "source_terms_preserved": true,
+      "translation_terms_preserved": true,
+      "fts5_hits": 1,
+      "hybrid_hits": 1,
+      "retrieval_mode": "hybrid",
+      "old_details_excluded": true,
+      "seconds": 0.54
+    },
+    {
+      "language": "en",
+      "request": "Find my invoice sent to AOGB",
+      "query": {
+        "english_query": "How to find my invoice sent to AOGB",
+        "task_type": "email_lookup",
+        "exact_terms": [
+          "AOGB"
+        ]
+      },
+      "expected_task_type": "email_lookup",
+      "task_type_correct": true,
+      "source_terms_preserved": true,
+      "translation_terms_preserved": true,
+      "fts5_hits": 1,
+      "hybrid_hits": 1,
+      "retrieval_mode": "hybrid",
+      "old_details_excluded": true,
+      "seconds": 0.56
+    },
+    {
+      "language": "zh",
+      "request": "幫我找寄給 AOGB 的發票 INV-0042.pdf",
+      "query": {
+        "english_query": "How to find the invoice INV-0042.pdf sent to AOGB",
+        "task_type": "email_lookup",
+        "exact_terms": [
+          "AOGB",
+          "INV-0042.pdf"
+        ]
+      },
+      "expected_task_type": "email_lookup",
+      "task_type_correct": true,
+      "source_terms_preserved": true,
+      "translation_terms_preserved": true,
+      "fts5_hits": 1,
+      "hybrid_hits": 1,
+      "retrieval_mode": "hybrid",
+      "old_details_excluded": true,
+      "seconds": 1.11
+    },
+    {
+      "language": "es",
+      "request": "Busca el correo con la factura enviada a AOGB, referencia INV-0042.",
+      "query": {
+        "english_query": "How to find the email with the invoice sent to AOGB, reference INV-0042.",
+        "task_type": "email_lookup",
+        "exact_terms": [
+          "AOGB",
+          "INV-0042"
+        ]
+      },
+      "expected_task_type": "email_lookup",
+      "task_type_correct": true,
+      "source_terms_preserved": true,
+      "translation_terms_preserved": true,
+      "fts5_hits": 1,
+      "hybrid_hits": 1,
+      "retrieval_mode": "hybrid",
+      "old_details_excluded": true,
+      "seconds": 1.02
+    },
+    {
+      "language": "ja",
+      "request": "王小明に送った請求書 INV-0042.pdf のメールを探してください",
+      "query": {
+        "english_query": "How to find the email sent to Wang Xiaoming containing the invoice INV-0042.pdf; exact terms: 王小明",
+        "task_type": "email_lookup",
+        "exact_terms": [
+          "王小明",
+          "INV-0042.pdf"
+        ]
+      },
+      "expected_task_type": "email_lookup",
+      "task_type_correct": true,
+      "source_terms_preserved": true,
+      "translation_terms_preserved": true,
+      "fts5_hits": 1,
+      "hybrid_hits": 1,
+      "retrieval_mode": "hybrid",
+      "old_details_excluded": true,
+      "seconds": 0.85
+    },
+    {
+      "language": "zh",
+      "request": "把文件的標題改成「AOGB 月報」",
+      "query": {
+        "english_query": "How to change the file title to 'AOGB Monthly Report'; exact terms: AOGB 月報",
+        "task_type": "document_edit",
+        "exact_terms": [
+          "AOGB 月報"
+        ]
+      },
+      "expected_task_type": "document_edit",
+      "task_type_correct": true,
+      "source_terms_preserved": true,
+      "translation_terms_preserved": true,
+      "fts5_hits": 1,
+      "hybrid_hits": 1,
+      "retrieval_mode": "hybrid",
+      "old_details_excluded": true,
+      "seconds": 0.74
+    },
+    {
+      "language": "es",
+      "request": "Cambia el título del documento a \"Informe AOGB\".",
+      "query": {
+        "english_query": "Change the document title to \"Informe AOGB\".",
+        "task_type": "document_edit",
+        "exact_terms": [
+          "Informe AOGB"
+        ]
+      },
+      "expected_task_type": "document_edit",
+      "task_type_correct": true,
+      "source_terms_preserved": true,
+      "translation_terms_preserved": true,
+      "fts5_hits": 1,
+      "hybrid_hits": 1,
+      "retrieval_mode": "hybrid",
+      "old_details_excluded": true,
+      "seconds": 0.54
+    }
+  ],
+  "paraphrase": {
+    "query": "Locate correspondence",
+    "fts5_hits": 0,
+    "hybrid_hits": 1
+  }
+}
