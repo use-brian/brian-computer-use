@@ -1,10 +1,12 @@
 import AppKit
+import Combine
 import ApplicationServices
 import BrianCore
 
 @MainActor
 final class DesktopController: DesktopTools {
     private let overlay = AgentFocusOverlay()
+    private var activationObserver: AnyCancellable?
     private var selectedWindow: SelectedWindow?
     func bind(_ window: SelectedWindow?) { selectedWindow = window }
     func availableWindows() -> [SelectedWindow] {
@@ -22,11 +24,16 @@ final class DesktopController: DesktopTools {
                                    window: $0, title: string($0, kAXTitleAttribute)) }
         }
     }
-    private func showTarget(rect: CGRect?, label: String, cursor: Bool = false, vision: Bool = false) {
-        if let selectedWindow, NSWorkspace.shared.frontmostApplication?.processIdentifier != selectedWindow.pid {
-            overlay.hide(); return
+    func showTarget(rect: CGRect?, label: String, cursor: Bool = false, vision: Bool = false) {
+        var visible = rect
+        if let selectedWindow {
+            let root = AXUIElementCreateApplication(selectedWindow.pid)
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == selectedWindow.pid,
+                  let focused = SelectedWindow.attribute(root, kAXFocusedWindowAttribute), CFEqual(focused, selectedWindow.window),
+                  let bounds = frame(selectedWindow.window) else { overlay.hide(); return }
+            visible = rect?.intersection(bounds)
         }
-        overlay.show(rect: rect, label: label, cursor: cursor, vision: vision)
+        overlay.show(rect: visible, label: label, cursor: cursor, vision: vision)
     }
     private let vision = WindowVision()
     func watchTargets(_ handler: @escaping (CGRect?) -> Void) { overlay.onTarget = handler }
@@ -55,6 +62,10 @@ final class DesktopController: DesktopTools {
     }
 
     init() {
+        activationObserver = NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didActivateApplicationNotification)
+            .sink { [weak self] _ in
+            Task { @MainActor in self?.overlay.hide() }
+        }
         var apps: [String: String] = [:]
         var urls: [String: URL] = [:]
         for running in NSWorkspace.shared.runningApplications where running.activationPolicy == .regular {

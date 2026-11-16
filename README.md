@@ -397,8 +397,12 @@ reference actions for supported clicks, row selection, value setting and
 scrolling. Brian still owns the local model, goal verification, confirmations,
 window boundary, and UX. Mail search, permitted app-local keys, and explicit
 vision requests choose the native implementation **before** dispatch. No CLI
-action is retried through native control, even after a safe refusal. Uncertain
-delivery, cancellation, malformed output, and timeout stop the task.
+action is blindly retried through native control. In 0.8.1, an explicit
+`not_delivered` + `safe` capability refusal can request window-scoped vision;
+safe stale-reference failures can re-observe within a bounded recovery budget.
+For uncertain selection/value writes, a complete fresh read of the exact ref
+must prove the requested postcondition before continuing. Other uncertain
+delivery, cancellation, malformed output, and transport timeouts stop the task.
 
 The adapter matches the selected AX window to a unique process/bounds entry,
 then pins the CLI window ID and process instance. Snapshots from another window
@@ -431,3 +435,31 @@ Calculator remained usable during the task. This establishes that sampled
 hybrid workflow, not universal headless compatibility or all-native replacement.
 
 Upstream: https://github.com/vercel-labs/agent-desktop/releases/tag/v1.3.1
+
+### Companion and preview fixes (0.8.1)
+
+The pet uses one opaque body silhouette, with connected animated legs. Only
+specific visible targets move it: whole-window inspection, offscreen geometry,
+stale queued events, and app switches cannot send it to an unrelated edge.
+Preview actions obtain live ref bounds; cached bounds are never used to move
+the pet. The highlight and pet respect the foreground selected window.
+
+Mail's “Top Results” and “All Results” section headings are read-only context,
+even though upstream advertises Click. Selecting the former was reproduced as
+`ACTION_FAILED` / `AXSelected` / `delivery_uncertain`. It is not a message row.
+Unresolved failures name the affected operation; system logs retain only action,
+code, operation, and delivery metadata, not mailbox content.
+
+Mail query replacement clears and reads back the exact Accessibility search
+field before inserting text. It does not rely on background Cmd+A, which was
+observed leaving part of the previous query and appending the next search.
+
+Validation for 0.8.1: 75 Swift tests pass, including Mail section-heading
+exclusion, complete/pinned postcondition verification, and live/visible target
+geometry. The signed app was relaunched and its existing grants refreshed.
+The live invoice regression advanced through clean query replacements and
+selected message rows without the reproduced heading-selection failure.
+The floating companion was visually checked for an opaque, seam-free body.
+The bounded live run was stopped with the original prompt preserved before
+verifying a full invoice answer. This validates these fixes, not general
+invoice-retrieval accuracy.

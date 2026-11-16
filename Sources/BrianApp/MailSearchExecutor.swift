@@ -52,12 +52,15 @@ struct MailSearchExecutor {
         guard let focused = attribute(root, kAXFocusedUIElementAttribute), CFEqual(focused, field) else {
             throw failure("Mail’s search field did not receive focus. No search was submitted.")
         }
-        // AXValue alone can change the displayed text without notifying Mail's
-        // search controller. Enter real text into the verified focused field.
-        try key(0, app: app, flags: .maskCommand)
-        try await Task.sleep(for: .milliseconds(60))
-        try key(51, app: app)
+        // Background Mail can ignore Cmd+A even when its field reports focus.
+        // Clear the exact AX field and verify it before inserting real text, so
+        // a subsequent query can never silently append to the previous one.
+        _ = AXUIElementSetAttributeValue(field, kAXValueAttribute as CFString, "" as CFString)
         try await Task.sleep(for: .milliseconds(100))
+        guard attribute(field, kAXValueAttribute) as? String == "" else {
+            throw failure("Mail’s previous search could not be cleared. No new search text was entered.")
+        }
+        // Real text input notifies Mail's search controller; AXValue alone does not.
         // Submit short Unicode runs so Mail's live suggestions cannot interrupt
         // between every letter. Keep complete characters (including surrogate pairs).
         var chunks: [String] = []
@@ -88,7 +91,7 @@ struct MailSearchExecutor {
         }
         try await Task.sleep(for: .milliseconds(200))
         guard string(field, kAXValueAttribute) == request.query else {
-            throw failure("Mail didn’t accept the search text. Nothing else was changed.")
+            throw failure("Mail’s search field did not match the requested query. No search was submitted.")
         }
         try key(36, app: app) // Return commits the search; targeted to Mail only.
         try await Task.sleep(for: .milliseconds(600))

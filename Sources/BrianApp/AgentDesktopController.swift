@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import BrianCore
+import OSLog
 
 /// Opt-in adapter. Native Mail search/keys/vision are chosen before dispatch;
 /// agent-desktop ref actions are never retried through the native backend.
@@ -15,6 +16,7 @@ import BrianCore
     private var readRoot: String?
     private var nativeObservation: DesktopObservation?
     private var searched = false
+    private var safeRecoveries = 0
     var applications: [DesktopApplication] { native.applications.filter { $0.id == window.app } }
     init(native: DesktopController, window: SelectedWindow) throws {
         self.native = native; self.window = window
@@ -85,6 +87,16 @@ import BrianCore
         snapshot = mapped
         return mapped.observation
     }
+    private func present(_ target: AgentDesktopSnapshot.Target?, label: String) async {
+        // Cached snapshot coordinates can be offscreen or out of date after a scroll.
+        native.showTarget(rect: nil, label: label)
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == window.pid,
+              let ref = target?.ref ?? target?.readRoot,
+              let result = try? await cli.call(["get", ref, "--property", "bounds"]),
+              let bounds = AgentDesktopSnapshot.liveBounds(result),
+              !Task.isCancelled else { return }
+        native.showTarget(rect: bounds, label: label, cursor: true)
+    }
     func confirmation(for action: PlannerAction, observation: DesktopObservation) -> String? {
         native.confirmation(for: action, observation: observation)
     }
@@ -111,12 +123,45 @@ import BrianCore
         case "wait": try await Task.sleep(for: .milliseconds(700)); return .init(app: window.app, message: "Waited for the selected window.")
         case "read":
             guard let target = action.target, let binding = snapshot.targets[target] else { throw AgentError.invalidAction }
+            await present(binding, label: "Reading content")
             readRoot = binding.readRoot; searched = true
             return .init(app: window.app, message: "Read this observed content and inspect its region on the next observation.")
         default:
-            let command = try AgentDesktopSnapshot.command(action, target: action.target.flatMap { snapshot.targets[$0] })
+            let binding = action.target.flatMap { snapshot.targets[$0] }
+            let command = try AgentDesktopSnapshot.command(action, target: binding)
+            await present(binding, label: action.activity(in: observation))
+            try Task.checkCancellation()
+            _ = try await verifyWindow()
             let result = try await cli.call(command.arguments + ["--timeout-ms", "5000"], input: command.input)
-            _ = try AgentDesktopCLI.checked(result)
+            do {
+                _ = try AgentDesktopCLI.checked(result)
+            } catch let failure as AgentDesktopFailure {
+                // Metadata only; never record message bodies, field values or screenshots.
+                Logger(subsystem: "com.usebrian.computer-use", category: "agent-desktop").error(
+                    "Action \(action.kind, privacy: .public): \(failure.code, privacy: .public), operation \(failure.operation ?? "unknown", privacy: .public), delivery \(failure.delivery ?? "unknown", privacy: .public)")
+                if !failure.safeToRetry, let ref = binding?.ref,
+                   let prior = observation.elements.first(where: { $0.id == action.target }),
+                   ["select", "set_text"].contains(action.kind) {
+                    _ = try await verifyWindow()
+                    let fresh = try? await cli.call(["snapshot", "--root", ref, "--max-depth", "2", "--timeout-ms", "4000"])
+                    if let fresh, let windowID,
+                       AgentDesktopSnapshot.verifies(action, prior: prior, rootSnapshot: fresh, windowID: windowID) {
+                        searched = true
+                        return .init(app: window.app, message: "The backend reported an error, but a fresh read of the exact target verified the requested selection/value. No action was repeated. Continue verifying the user's full request.")
+                    }
+                }
+                if failure.safeToRetry, safeRecoveries < 2,
+                   ["ACTION_FAILED", "STALE_REF", "AMBIGUOUS_TARGET", "TIMEOUT"].contains(failure.code) {
+                    safeRecoveries += 1
+                    if failure.code == "ACTION_FAILED" {
+                        throw DesktopRecoveryError.accessibilityUnavailable("The headless control rejected this action before delivering any input. Inspect the selected window visually for another supported target.")
+                    }
+                    return .init(app: window.app, message: "The target could not be resolved; no input was delivered. Inspect a fresh observation before choosing the next action. " + failure.code)
+                }
+                throw AgentError.runtime("I couldn’t verify the \(action.kind == "select" ? "selection" : "action") in \(window.name). " +
+                    (failure.operation == "AXSelected" ? "The app rejected selecting that item. " : "") +
+                    "I stopped to avoid repeating an action that may already have applied.")
+            }
             // A successful dispatch is never proof of completing the user's goal.
             searched = true
             return .init(app: window.app, message: "agent-desktop dispatched a headless action. Verify the effect in a fresh observation; do not repeat it through another backend.")

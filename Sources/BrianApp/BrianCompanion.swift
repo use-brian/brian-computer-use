@@ -28,24 +28,26 @@ struct BrianAvatar: View {
                 let origin = CGPoint(x: (size.width - cell * 7) / 2, y: cell * 0.7 + bounce)
                 let cyan = Color(red: 0, green: 0.83, blue: 0.92)
                 let ink = Color(red: 0.025, green: 0.14, blue: 0.20)
-                let rows = [2...4, 1...5, 0...6, 0...6, 1...5]
 
                 context.fill(Path(ellipseIn: CGRect(x: size.width * 0.24, y: cell * 7.25,
                                                      width: size.width * 0.52, height: cell * 0.36)),
                              with: .color(.black.opacity(0.12)))
-                for (row, columns) in rows.enumerated() {
-                    for column in columns {
-                        let rect = CGRect(x: origin.x + Double(column) * cell, y: origin.y + Double(row) * cell,
-                                          width: cell - 0.5, height: cell - 0.5)
-                        context.fill(Path(rect), with: .color(cyan))
-                    }
-                }
+                // One opaque silhouette: no transparent seams over other windows.
                 for column in [2, 4] {
                     let kick = time == 0 ? 0 : moving ? sin(time * 22 + (column == 2 ? 0 : .pi)) * cell * 0.38 : mood == .working ? sin(time * 7 + Double(column)) * 2.5 : 0
                     context.fill(Path(CGRect(x: origin.x + Double(column) * cell,
-                                             y: origin.y + 5 * cell + kick, width: cell - 0.5, height: cell - 0.5)),
+                                             y: origin.y + 4.5 * cell, width: cell, height: 1.5 * cell + kick)),
                                  with: .color(cyan))
                 }
+                let outline: [(CGFloat, CGFloat)] = [(2,0),(5,0),(5,1),(6,1),(6,2),(7,2),(7,4),(6,4),
+                                                       (6,5),(1,5),(1,4),(0,4),(0,2),(1,2),(1,1),(2,1)]
+                var body = Path()
+                for (index, point) in outline.enumerated() {
+                    let p = CGPoint(x: origin.x + point.0 * cell, y: origin.y + point.1 * cell)
+                    if index == 0 { body.move(to: p) } else { body.addLine(to: p) }
+                }
+                body.closeSubpath()
+                context.fill(body, with: .color(cyan))
                 let blink = time != 0 && time.truncatingRemainder(dividingBy: 4.5) < 0.16
                 for column in [2, 4] {
                     let eyeHeight = blink || mood == .happy ? cell * 0.12 : cell * 0.46
@@ -271,8 +273,12 @@ final class CompanionController {
         model.$hasResponse.removeDuplicates().sink { [weak self] _ in
             Task { @MainActor in self?.updateReply() }
         }.store(in: &subscriptions)
-        model.$activityTarget.compactMap { $0 }.sink { [weak self] rect in
-            Task { @MainActor in self?.follow(rect) }
+        model.$activityTarget.removeDuplicates().sink { [weak self] rect in
+            Task { @MainActor in
+                guard let self, self.model.activityTarget == rect, self.model.isRunning else { return }
+                if let rect { self.follow(rect) }
+                else { self.movement?.cancel(); self.movementID = UUID(); self.motion.moving = false }
+            }
         }.store(in: &subscriptions)
         model.$isRunning.removeDuplicates().dropFirst().sink { [weak self] running in
             Task { @MainActor in self?.workChanged(running) }
@@ -317,11 +323,14 @@ final class CompanionController {
 
     private func follow(_ target: CGRect) {
         guard model.isRunning, !hiddenByUser, !interacting, Date() >= manualUntil else { return }
+        let display = screen(for: target)
+        guard let visible = CompanionPlacement.visibleTarget(target, screen: display) else { return }
         motion.compact = true
-        move(to: CompanionPlacement.beside(target, size: cursorSize, screen: screen(for: target)))
+        move(to: CompanionPlacement.beside(visible, size: cursorSize, screen: display))
     }
 
     private func workChanged(_ running: Bool) {
+        guard running == model.isRunning else { return }
         if running { reply.hide() }
         guard !hiddenByUser, !interacting else { return }
         if running {

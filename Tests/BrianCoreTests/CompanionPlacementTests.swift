@@ -38,4 +38,15 @@ final class CompanionPlacementTests: XCTestCase {
         XCTAssertFalse(result.intersects(bar))
         XCTAssertLessThan(result.maxY, bar.minY)
     }
+    func testMovementIgnoresWindowSizedMissingAndOffscreenTargets() {
+        let screen = CGRect(x: -1440, y: 0, width: 1440, height: 900)
+        for invalid in [screen, .zero, .null, CGRect(x: 200, y: 100, width: 80, height: 30),
+                        CGRect(x: CGFloat.nan, y: 10, width: 30, height: 20)] {
+            XCTAssertNil(CompanionPlacement.visibleTarget(invalid, screen: screen))
+        }
+        let partiallyVisible = CGRect(x: -1460, y: 200, width: 400, height: 80)
+        XCTAssertEqual(CompanionPlacement.visibleTarget(partiallyVisible, screen: screen),
+                       CGRect(x: -1440, y: 200, width: 380, height: 80))
+    }
+
 }

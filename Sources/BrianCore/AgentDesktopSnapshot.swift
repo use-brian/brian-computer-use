@@ -36,7 +36,11 @@ public struct AgentDesktopSnapshot: Sendable {
             let id = "ad\(rows.count)"
             let contentGroup = group ?? (inDocument && role == "AXCell" ? id : nil)
             if !label.isEmpty || !value.isEmpty || ref != nil {
-                let canClick = ref != nil && actions.contains("Click") && !inDocument && role != "AXLink"
+                // Mail exposes section headings as Click-capable rows/cells even
+                // though AXSelected fails. They are context, never messages.
+                let mailHeading = app == "com.apple.mail" && ["AXRow", "AXCell"].contains(role)
+                    && ["top results", "all results"].contains(label.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+                let canClick = ref != nil && actions.contains("Click") && !inDocument && role != "AXLink" && !mailHeading
                 let row = DesktopElement(id: id, role: role, label: String(label.prefix(180)), value: String(value.prefix(inDocument ? 4000 : 500)),
                     enabled: !states.contains("disabled"), editable: ref != nil && actions.contains("SetValue"),
                     actions: canClick ? ["AXPress"] : [], selectable: canClick && role == "AXRow", selected: states.contains("selected"), contentGroup: contentGroup)
@@ -56,6 +60,36 @@ public struct AgentDesktopSnapshot: Sendable {
         }
         observation = .init(app: app, name: name, window: title, accessibility: true, truncated: truncated, elements: rows)
         targets = refs
+    }
+    /// Only a new, complete root read can establish an uncertain action's effect.
+    /// The caller must obtain this via `snapshot --root` on the dispatched ref.
+    public static func verifies(_ action: PlannerAction, prior: DesktopElement,
+                                rootSnapshot: JSONValue, windowID: String) -> Bool {
+        guard let data = try? AgentDesktopCLI.checked(rootSnapshot), data["complete"].isTrue,
+              !data["truncated"].isTrue, data["window"]["id"].string == windowID else { return false }
+        let root = data["tree"]
+        if action.kind == "select", prior.role == "AXRow", root["role"].string == "row" {
+            return root["states"].array.contains(.string("selected"))
+        }
+        if action.kind == "set_text", prior.editable, let value = action.value {
+            return root["value"].string == value
+        }
+        // A changed screen alone cannot verify a click, scroll, send or toggle.
+        return false
+    }
+    public static func liveBounds(_ envelope: JSONValue) -> CGRect? {
+        guard let data = try? AgentDesktopCLI.checked(envelope), data["live"].isTrue,
+              data["property"].string == "bounds" else { return nil }
+        func number(_ key: String) -> Double? {
+            switch data["value"][key] {
+            case .number(let n): return Double(n)
+            case .decimal(let n) where n.isFinite: return n
+            default: return nil
+            }
+        }
+        guard let x = number("x"), let y = number("y"), let width = number("width"), let height = number("height"),
+              width > 0, height > 0 else { return nil }
+        return CGRect(x: x, y: y, width: width, height: height)
     }
     public static func command(_ action: PlannerAction, target: Target?) throws -> (arguments: [String], input: String?) {
         guard let target, let ref = target.ref, ref.first == "@", ref.contains(":e") else { throw AgentError.invalidAction }

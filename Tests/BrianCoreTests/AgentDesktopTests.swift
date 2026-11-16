@@ -57,4 +57,45 @@ final class AgentDesktopTests: XCTestCase {
         let result = try await AgentDesktopCLI(executable: script, stateRoot: dir).call(["set-value", "@s:e1", "--stdin"], input: "private text\n")
         XCTAssertTrue(try AgentDesktopCLI.checked(result)["accepted"].isTrue)
     }
+    func testMailSearchHeadingsAreContextNotSelectableResults() throws {
+        let tree = try JSONDecoder().decode(JSONValue.self, from: Data(#"""
+        {"role":"window","children":[
+          {"role":"row","ref_id":"@s:e1","available_actions":["Click"],"name":"Top Results"},
+          {"role":"row","ref_id":"@s:e2","available_actions":["Click"],"children":[{"role":"statictext","value":"All Results"}]},
+          {"role":"row","ref_id":"@s:e3","available_actions":["Click"],"children":[{"role":"statictext","value":"Invoice for AOGB"}]}
+        ]}
+        """#.utf8))
+        let mapped = try AgentDesktopSnapshot(app: "com.apple.mail", name: "Mail", windowID: "w-1", snapshots: [envelope(tree)])
+        for row in mapped.observation.elements.prefix(2) {
+            XCTAssertFalse(row.selectable)
+            XCTAssertTrue(row.actions.isEmpty)
+            XCTAssertThrowsError(try PlannerAction(kind: "select", target: row.id).validate(observation: mapped.observation, apps: []))
+        }
+        XCTAssertTrue(mapped.observation.elements.last!.selectable)
+    }
+    func testUncertainActionRequiresExactPostconditionAndCompletePinnedRead() {
+        let prior = DesktopElement(id: "ad1", role: "AXRow", label: "Invoice", value: "", enabled: true,
+                                   editable: false, actions: ["AXPress"], selectable: true)
+        let selected: JSONValue = .object(["role": .string("row"), "states": .array([.string("selected")])])
+        let action = PlannerAction(kind: "select", target: "ad1")
+        XCTAssertTrue(AgentDesktopSnapshot.verifies(action, prior: prior, rootSnapshot: envelope(selected), windowID: "w-1"))
+        XCTAssertFalse(AgentDesktopSnapshot.verifies(action, prior: prior, rootSnapshot: envelope(selected, complete: false), windowID: "w-1"))
+        XCTAssertFalse(AgentDesktopSnapshot.verifies(action, prior: prior, rootSnapshot: envelope(selected), windowID: "w-2"))
+        XCTAssertFalse(AgentDesktopSnapshot.verifies(action, prior: prior, rootSnapshot: envelope(.object(["role": .string("row")])), windowID: "w-1"))
+        XCTAssertFalse(AgentDesktopSnapshot.verifies(.init(kind: "press", target: "ad1"), prior: prior, rootSnapshot: envelope(selected), windowID: "w-1"))
+        let field = DesktopElement(id: "ad2", role: "AXTextField", label: "Search", value: "old", enabled: true, editable: true, actions: [])
+        let text = PlannerAction(kind: "set_text", target: "ad2", value: "invoice")
+        XCTAssertTrue(AgentDesktopSnapshot.verifies(text, prior: field, rootSnapshot: envelope(.object(["value": .string("invoice")])), windowID: "w-1"))
+        XCTAssertFalse(AgentDesktopSnapshot.verifies(text, prior: field, rootSnapshot: envelope(.object(["value": .string("invoice partial")])), windowID: "w-1"))
+    }
+    func testOnlyLivePositiveBoundsMayMovePet() throws {
+        let data: JSONValue = .object(["version": .string("2.6"), "ok": .bool(true), "data": .object([
+            "live": .bool(true), "property": .string("bounds"),
+            "value": .object(["x": .number(-600), "y": .number(100), "width": .decimal(393.5), "height": .number(80)])])])
+        XCTAssertEqual(AgentDesktopSnapshot.liveBounds(data), CGRect(x: -600, y: 100, width: 393.5, height: 80))
+        XCTAssertNil(AgentDesktopSnapshot.liveBounds(envelope(.object([:]))))
+        let stale: JSONValue = .object(["version": .string("2.6"), "ok": .bool(true), "data": .object([
+            "live": .bool(false), "property": .string("bounds"), "value": data["data"]["value"]])])
+        XCTAssertNil(AgentDesktopSnapshot.liveBounds(stale))
+    }
 }

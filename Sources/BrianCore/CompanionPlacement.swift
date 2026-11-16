@@ -1,6 +1,17 @@
 import Foundation
 
 public enum CompanionPlacement {
+    /// Reject missing/off-display geometry instead of clamping it to a random edge.
+    public static func visibleTarget(_ target: CGRect, screen: CGRect) -> CGRect? {
+        guard [target.origin.x, target.origin.y, target.width, target.height,
+               screen.origin.x, screen.origin.y, screen.width, screen.height].allSatisfy({ $0.isFinite }),
+              target.width > 0, target.height > 0, screen.width > 0, screen.height > 0 else { return nil }
+        let visible = target.intersection(screen)
+        guard !visible.isNull, !visible.isEmpty,
+              visible.width * visible.height < screen.width * screen.height * 0.65 else { return nil }
+        return visible
+    }
+
     public static func beside(_ target: CGRect, size: CGSize, screen: CGRect) -> CGRect {
         let gap: CGFloat = 10
         let origins = [CGPoint(x: target.minX-size.width-gap, y: target.midY-size.height/2),

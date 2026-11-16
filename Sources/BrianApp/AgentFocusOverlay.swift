@@ -1,4 +1,5 @@
 import AppKit
+import BrianCore
 
 /// A separate, click-through surface: never steals focus or warps the real cursor.
 @MainActor final class AgentFocusOverlay {
@@ -15,15 +16,16 @@ import AppKit
         drawing.setAccessibilityHidden(true)
     }
     func show(rect: CGRect?, label: String, cursor: Bool = false, vision: Bool = false) {
-        guard let rect, rect.width > 0, rect.height > 0, let primary = NSScreen.screens.first else { hide(); return }
+        guard let rect, [rect.minX, rect.minY, rect.width, rect.height].allSatisfy({ $0.isFinite }), rect.width > 0, rect.height > 0, let primary = NSScreen.screens.first else { hide(); return }
         // AX and ScreenCaptureKit use global Quartz points (top-left of primary display).
         let appKitRect = NSRect(x: rect.minX, y: primary.frame.maxY - rect.maxY, width: rect.width, height: rect.height)
-        onTarget?(appKitRect)
         let screen = NSScreen.screens.max { a, b in
             a.frame.intersection(appKitRect).area < b.frame.intersection(appKitRect).area
         } ?? primary
         let frame = appKitRect.insetBy(dx: -5, dy: -5).intersection(screen.frame)
-        guard !frame.isEmpty else { hide(); return }
+        guard !frame.isNull, !frame.isEmpty else { hide(); return }
+        // Window inspection is a highlight, not a destination for the pet.
+        onTarget?(cursor ? CompanionPlacement.visibleTarget(appKitRect, screen: screen.visibleFrame) : nil)
         panel.setFrame(frame, display: false)
         drawing.target = appKitRect.offsetBy(dx: -frame.minX, dy: -frame.minY)
         drawing.cursor = cursor; drawing.vision = vision

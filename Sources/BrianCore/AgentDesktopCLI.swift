@@ -20,7 +20,8 @@ public struct AgentDesktopCLI: Sendable {
         guard envelope["ok"].isTrue else {
             let error = envelope["error"]
             throw AgentDesktopFailure(code: error["code"].string ?? "UNKNOWN", delivery: error["disposition"]["delivery"].string,
-                                      retry: error["disposition"]["retry"].string)
+                                      retry: error["disposition"]["retry"].string,
+                                      reason: error["message"].string, operation: error["details"]["operation"].string)
         }
         return envelope["data"]
     }
@@ -29,9 +30,11 @@ public struct AgentDesktopFailure: LocalizedError, Sendable {
     public let code: String
     public let delivery: String?
     public let retry: String?
+    public var reason: String? = nil
+    public var operation: String? = nil
     public var safeToRetry: Bool { delivery == "not_delivered" && retry == "safe" }
     public var errorDescription: String? {
-        "agent-desktop: \(code). " + (safeToRetry ? "No input was delivered. No alternate backend was tried." : "The action may have applied. Review the window; Brian will not repeat it through another backend.")
+        "agent-desktop: \(code). " + (reason.map { String($0.prefix(240)) + ". " } ?? "") + (safeToRetry ? "No input was delivered. No alternate backend was tried." : "The action may have applied. Review the window; Brian will not repeat it through another backend.")
     }
 }
 private final class CLIWorker: @unchecked Sendable {
