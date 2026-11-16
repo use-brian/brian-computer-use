@@ -49,4 +49,36 @@ final class CompanionPlacementTests: XCTestCase {
                        CGRect(x: -1440, y: 200, width: 380, height: 80))
     }
 
+    func testCursorTipStaysOnTargetAcrossDisplaysAndCorners() throws {
+        for screen in [CGRect(x: 0, y: 25, width: 1512, height: 900),
+                       CGRect(x: -1920, y: -300, width: 1920, height: 1080)] {
+            for point in [CGPoint(x: screen.minX + 1, y: screen.minY + 1),
+                          CGPoint(x: screen.maxX - 1, y: screen.minY + 1),
+                          CGPoint(x: screen.maxX - 1, y: screen.maxY - 1),
+                          CGPoint(x: screen.minX + 1, y: screen.maxY - 1),
+                          CGPoint(x: screen.midX, y: screen.midY)] {
+                let cursor = try XCTUnwrap(CompanionPlacement.cursor(at: point, screen: screen))
+                XCTAssertEqual(cursor.frame.midX, point.x)
+                XCTAssertEqual(cursor.frame.midY, point.y)
+                // The badge remains inside the screen while the tip never shifts.
+                let badge = CGPoint(x: point.x + (cursor.flipX ? -17 : 17),
+                                    y: point.y + (cursor.flipY ? 20 : -20))
+                XCTAssertTrue(screen.contains(CGRect(x: badge.x - 8, y: badge.y - 8, width: 16, height: 16)))
+            }
+        }
+    }
+    func testCursorRejectsOffscreenAndInvalidPoints() {
+        let screen = CGRect(x: 0, y: 0, width: 1512, height: 982)
+        XCTAssertNil(CompanionPlacement.cursor(at: CGPoint(x: -1, y: 200), screen: screen))
+        XCTAssertNil(CompanionPlacement.cursor(at: CGPoint(x: CGFloat.nan, y: 200), screen: screen))
+    }
+
+    func testClippingNeverChangesTheIndicatedActionPoint() throws {
+        let screen = CGRect(x: 0, y: 0, width: 1512, height: 982)
+        let visionTarget = CGRect(x: -10, y: 100, width: 24, height: 24)
+        XCTAssertEqual(CompanionPlacement.cursorTarget(visionTarget, screen: screen), visionTarget)
+        XCTAssertEqual(try XCTUnwrap(CompanionPlacement.cursorTarget(visionTarget, screen: screen)).midX, 2)
+        XCTAssertNil(CompanionPlacement.cursorTarget(CGRect(x: -30, y: 100, width: 40, height: 20), screen: screen))
+    }
+
 }

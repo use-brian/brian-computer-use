@@ -56,7 +56,38 @@ private actor ScriptedPlanner: LanguagePlanner {
     }
 }
 
+@MainActor private final class AutomaticallyRoutedDesktop: DesktopTools {
+    let applications = [DesktopApplication(id: "first.app", name: "First"), DesktopApplication(id: "second.app", name: "Second")]
+    let planningInstructions = AutomaticTargeting.planningInstructions
+    var current = "first.app"
+    var executedApps: [String] = []
+    func observe(app: String?) async throws -> DesktopObservation {
+        .init(app: current, name: current, window: "Document", accessibility: true, truncated: false,
+              elements: [.init(id: "e0", role: "AXButton", label: "Control", value: executedApps.isEmpty ? "Pending" : "Verified",
+                               enabled: true, editable: false, actions: ["AXPress"])])
+    }
+    func confirmation(for action: PlannerAction, observation: DesktopObservation) -> String? { nil }
+    func execute(_ action: PlannerAction, observation: DesktopObservation) async throws -> DesktopToolResult {
+        if action.kind == "open_app" { current = action.app! }
+        else { executedApps.append(current) }
+        return .init(app: current, message: "Inspect the chosen app next.")
+    }
+}
+
 @MainActor final class NaturalAgentTests: XCTestCase {
+    func testAutomaticModeLetsPlannerChooseAnotherAppAndVerifyIt() async throws {
+        let planner = ScriptedPlanner([.init(kind: "open_app", app: "second.app"),
+                                       .init(kind: "press", target: "e0"), .init(kind: "done", message: "Verified")])
+        let desktop = AutomaticallyRoutedDesktop()
+        let result = try await NaturalAgent(planner: planner, tools: desktop).run(task: "Use the second app", app: "first.app",
+            conversation: [], approve: { _ in true }, onEvent: { _ in })
+        XCTAssertFalse(result.needsInput)
+        XCTAssertEqual(desktop.executedApps, ["second.app"])
+        let contexts = await planner.captured()
+        XCTAssertEqual(contexts[0]["scope_instructions"].string, AutomaticTargeting.planningInstructions)
+        XCTAssertEqual(contexts[0]["installed_applications"].array.count, 2)
+        XCTAssertEqual(contexts[1]["observation"]["app"].string, "second.app")
+    }
     func testWindowScopeRejectsMailDetourBeforeExecution() async throws {
         let planner = ScriptedPlanner([.init(kind: "search_mail", value: "flight")])
         let desktop = FakeDesktop()

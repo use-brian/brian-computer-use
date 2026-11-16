@@ -140,10 +140,13 @@ public struct DesktopToolResult: Sendable {
 }
 @MainActor public protocol DesktopTools {
     var applications: [DesktopApplication] { get }
+    var planningInstructions: String { get }
     func observe(app: String?) async throws -> DesktopObservation
     func confirmation(for action: PlannerAction, observation: DesktopObservation) -> String?
     func execute(_ action: PlannerAction, observation: DesktopObservation) async throws -> DesktopToolResult
 }
+public extension DesktopTools { var planningInstructions: String { "Mac mode" } }
+
 public struct ConversationTurn: Codable, Sendable {
     public let role: String
     public let content: String
@@ -201,7 +204,7 @@ public struct NaturalResult: Sendable {
             let context: JSONValue = .object([
                 "installed_applications": try json(tools.applications.filter { scope == nil || $0.id == scope?.app }),
                 "execution_scope": try json(scope),
-                "scope_instructions": .string(scope == nil ? "Mac mode" : "Operate only inside the selected app window, in the background. Do not open other apps, URLs, windows, menus, or use the clipboard. Read, press, select, set_text, accessible scroll, and vision inspection/click can target this window. If the request needs another app or unsupported foreground input, ask the user to change the target mode."),
+                "scope_instructions": .string(scope == nil ? tools.planningInstructions : "Operate only inside the selected app window, in the background. Do not open other apps, URLs, windows, menus, or use the clipboard. Read, press, select, set_text, accessible scroll, and vision inspection/click can target this window. If the request needs another app or unsupported foreground input, ask the user to change the target mode."),
                 "observation": try json(observation),
                 "conversation": try json(Array(conversation.suffix(6))),
                 "history": .array(Array(history.suffix(12))),

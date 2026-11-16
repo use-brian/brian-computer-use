@@ -2,8 +2,10 @@
 
 **Control + Option + Space → say what you want → Brian plans and acts locally.**
 
-The app keeps a single input line and an animated cyan companion. Brian runs to
-the bar when it opens, shrinks beside the current action target while working,
+The app keeps a single input line and chooses the app/window automatically from
+the request and current context. There is no app or backend picker. The chosen
+app appears as read-only status while working. Brian runs to the bar when it
+opens, becomes a small pink virtual cursor at a visible action target,
 and returns to the bar afterward. Closing the bar sends Brian back to the screen
 edge nearest its resting position; a running task keeps target-following active
 and returns to the edge when finished. Manual dragging takes priority; motion respects
@@ -463,3 +465,57 @@ The floating companion was visually checked for an opaque, seam-free body.
 The bounded live run was stopped with the original prompt preserved before
 verifying a full invoice answer. This validates these fixes, not general
 invoice-retrieval accuracy.
+
+### Reference-style virtual cursor (0.9.0)
+
+The working companion now becomes a small pink pointer with a round Brian badge,
+following the Grok Bot cursor reference supplied for this change. The arrow tip
+marks the center of a fresh visible action target, rather than placing a pet
+beside the entire control. The badge flips inward at display edges without
+clamping or moving the tip. Cursor mode is click-through and sits above menus;
+it never moves the user's physical pointer. Invalidated targets return Brian
+to its compact waiting position, and completion restores the normal pet.
+
+A brief pulse indicates an input attempt, not successful task completion.
+Read-only inspection does not pulse. Reduced Motion disables pulse animation
+and travel; existing explicit action confirmation and result verification remain.
+The large target ring is removed, and window-inspection outlines are lighter.
+
+Research: the supplied screenshot establishes the arrow/badge/glow treatment.
+The [Grok Bot computer guide](https://docs.x.ai/grok-bot/computer-and-apps)
+provides the broader watching/control context. This change applies the cursor
+pattern to Brian's local desktop interaction; it does not introduce Grok's
+cloud computer or claim to reproduce animation timing from a still image.
+
+Validation: 78 Swift tests pass. New cases verify exact tip positioning and
+inward badge placement on primary/negative-coordinate displays and all corners.
+The actual SwiftUI cursor artwork was rendered and reviewed on light and dark
+backgrounds, including the pulse and mirrored edge state.
+
+### Automatic app choice (0.9.0)
+
+Users describe the outcome; they do not choose an app, window mode, or backend.
+The local planner receives all supported installed apps and can choose another
+app with `open_app`. The harness routes `search_mail` to Apple Mail automatically,
+chooses the app's focused/main or sole window, and pins its identity before any
+control action. It never picks the first of several ambiguous documents.
+
+The bundled agent-desktop adapter is selected internally when available; native
+control handles its existing Mail, keyboard and vision paths. A missing bundle
+uses native control before any action. Unknown or partially delivered failures
+are not retried through a different backend. App changes discard stale refs and
+observations. Background operation remains the default; foreground-only input
+requests an explicit handoff, raises and verifies the exact intended window,
+then returns to window-scoped operation. A deliberate new-window shortcut makes
+the next observation identify the new active document.
+
+The 84-test Swift suite covers automatic window choice, email/app routing,
+foreground handoff classification, and a scripted planner switching apps and
+verifying the requested result. Earlier manual-window/preview instructions above
+are historical; the picker is removed in this version.
+
+Live validation: after a fresh app launch with no preselected target, the invoice
+request automatically chose Mail and entered its control loop. The bar exposed
+only a read-only working-app label. The bounded check was stopped after routing
+verification, with the user's draft preserved; it was not a full invoice-answer
+evaluation.

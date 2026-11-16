@@ -4,12 +4,9 @@ import BrianCore
 
 @MainActor
 final class CommandModel: ObservableObject {
-    @Published var useAgentDesktop = false
-    @Published var windows: [SelectedWindow] = []
-    @Published var selectedWindowID: UUID?
-    var selectedWindow: SelectedWindow? { windows.first { $0.id == selectedWindowID } }
-    var targetLabel: String { selectedWindow?.name ?? "Mac" }
+    @Published private(set) var targetLabel = ""
     @Published var activityTarget: CGRect?
+    @Published var activityPulse = 0
     @Published var instruction = ""
     @Published var status = ""
     @Published var isRunning = false
@@ -37,7 +34,8 @@ final class CommandModel: ObservableObject {
             ?? Bundle.main.resourceURL!.appendingPathComponent("mac-control")
         let host = Bundle.main.executableURL!.deletingLastPathComponent().appendingPathComponent("brian-runtime-host")
         runtime = MCPRuntime(executable: bundle.appendingPathComponent("mac-control"), host: host)
-        desktop.watchTargets { [weak self] rect in self?.activityTarget = rect }
+        desktop.watchTargets({ [weak self] rect in self?.activityTarget = rect },
+                             onAction: { [weak self] in self?.activityPulse += 1 })
     }
 
     func submit() {
@@ -45,20 +43,14 @@ final class CommandModel: ObservableObject {
         let text = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         hasError = false; isFinished = false; hasResponse = false; needsAccessibility = false; needsScreenRecording = false
+        targetLabel = ""
         isRunning = true
         task = Task { [self] in
-            var external: AgentDesktopController?
-            defer { external?.finish(); desktop.finish(); isRunning = false; task = nil }
+            let tools = AutomaticDesktopController(native: desktop) { [weak self] name in self?.targetLabel = name }
+            defer { tools.finish(); isRunning = false; task = nil }
             do {
-                let window = selectedWindow
-                desktop.bind(window)
-                if useAgentDesktop {
-                    guard let window else { throw AgentError.runtime("Select an app window before using the agent-desktop preview.") }
-                    external = try AgentDesktopController(native: desktop, window: window)
-                }
-                let tools: any DesktopTools = external ?? desktop
                 let result = try await NaturalAgent(planner: runtime, tools: tools).run(
-                    task: text, app: window?.app ?? foregroundApp, conversation: conversation, scope: window?.scope,
+                    task: text, app: foregroundApp, conversation: conversation,
                     approve: { [weak self] reason in await self?.requestApproval(reason) ?? false },
                     onEvent: { [weak self] message in self?.status = message })
                 try Task.checkCancellation()
@@ -114,18 +106,10 @@ final class CommandModel: ObservableObject {
         guard !isRunning, let id = NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
               id != Bundle.main.bundleIdentifier else { return }
         foregroundApp = id
-        let previous = selectedWindow
-        windows = desktop.availableWindows()
-        if let previous {
-            if let match = windows.first(where: { $0.pid == previous.pid && CFEqual($0.window, previous.window) }) {
-                selectedWindowID = match.id
-            } else {
-                windows.append(previous); selectedWindowID = previous.id
-            }
-        }
     }
     func newTask() {
         guard !isRunning else { return }
+        targetLabel = ""
         conversation = []; foregroundApp = nil; instruction = ""; status = ""; hasResponse = false; hasError = false; isFinished = false
     }
     func shutdown() async {

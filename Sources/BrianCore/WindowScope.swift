@@ -8,14 +8,14 @@ public struct WindowScope: Codable, Sendable, Equatable {
     public func validate(_ action: PlannerAction) throws {
         switch action.kind {
         case "open_url", "search_web", "vision_scroll":
-            throw AgentError.runtime("This action needs foreground control. Choose Mac in Brian’s target menu to run it there.")
+            throw AgentError.runtime("This action requires foreground control of the current window.")
         case "open_app":
-            guard action.app == app else { throw AgentError.runtime("This task is restricted to the selected window. Select another window or choose Mac to work across apps.") }
+            guard action.app == app else { throw AgentError.runtime("This action is pinned to a different window. Brian must switch apps before dispatch.") }
         case "search_mail":
-            guard app == "com.apple.mail" else { throw AgentError.runtime("Select a Mail window to search email in window mode.") }
+            guard app == "com.apple.mail" else { throw AgentError.runtime("Brian must choose a Mail window before searching email.") }
         case "key":
             guard ["return", "tab", "escape", "cmd+f", "cmd+a", "left", "right", "up", "down"].contains(action.value ?? "") else {
-                throw AgentError.runtime("That shortcut can affect other windows or the shared clipboard. Use Mac mode for this action.")
+                throw AgentError.runtime("That shortcut requires foreground control because it can affect other windows or the shared clipboard.")
             }
         default: break
         }

@@ -132,6 +132,7 @@ import OSLog
             await present(binding, label: action.activity(in: observation))
             try Task.checkCancellation()
             _ = try await verifyWindow()
+            if ["press", "select", "set_text"].contains(action.kind) { native.pulseTarget() }
             let result = try await cli.call(command.arguments + ["--timeout-ms", "5000"], input: command.input)
             do {
                 _ = try AgentDesktopCLI.checked(result)

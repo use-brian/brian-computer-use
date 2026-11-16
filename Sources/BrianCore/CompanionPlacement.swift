@@ -1,6 +1,26 @@
 import Foundation
 
 public enum CompanionPlacement {
+    public struct Cursor: Equatable, Sendable {
+        public let frame: CGRect
+        public let flipX: Bool
+        public let flipY: Bool
+    }
+    /// Keep the arrow tip at the action point. Flip its badge at display edges;
+    /// clamping the panel would silently move the indicated click away from it.
+    public static func cursor(at point: CGPoint, screen: CGRect) -> Cursor? {
+        guard point.x.isFinite, point.y.isFinite, screen.contains(point) else { return nil }
+        return Cursor(frame: CGRect(x: point.x - 28, y: point.y - 28, width: 56, height: 56),
+                      flipX: point.x + 28 > screen.maxX, flipY: point.y - 28 < screen.minY)
+    }
+
+    /// Visibility may clip a rectangle, but must never shift a click's center.
+    public static func cursorTarget(_ target: CGRect, screen: CGRect) -> CGRect? {
+        guard visibleTarget(target, screen: screen) != nil,
+              screen.contains(CGPoint(x: target.midX, y: target.midY)) else { return nil }
+        return target
+    }
+
     /// Reject missing/off-display geometry instead of clamping it to a random edge.
     public static func visibleTarget(_ target: CGRect, screen: CGRect) -> CGRect? {
         guard [target.origin.x, target.origin.y, target.width, target.height,

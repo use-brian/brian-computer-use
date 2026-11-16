@@ -9,10 +9,10 @@ final class DesktopController: DesktopTools {
     private var activationObserver: AnyCancellable?
     private var selectedWindow: SelectedWindow?
     func bind(_ window: SelectedWindow?) { selectedWindow = window }
-    func availableWindows() -> [SelectedWindow] {
+    func availableWindows(app: String? = nil) -> [SelectedWindow] {
         guard AXIsProcessTrusted() else { return [] }
         return NSWorkspace.shared.runningApplications.filter { running in
-            running.activationPolicy == .regular && running.bundleIdentifier != Bundle.main.bundleIdentifier &&
+            running.activationPolicy == .regular && (app == nil || running.bundleIdentifier == app) && running.bundleIdentifier != Bundle.main.bundleIdentifier &&
             !protectedApps.contains(running.bundleIdentifier ?? "") && allowsApp(running.bundleIdentifier ?? "", url: running.bundleURL)
         }.flatMap { running -> [SelectedWindow] in
             guard let id = running.bundleIdentifier else { return [] }
@@ -31,17 +31,24 @@ final class DesktopController: DesktopTools {
             guard NSWorkspace.shared.frontmostApplication?.processIdentifier == selectedWindow.pid,
                   let focused = SelectedWindow.attribute(root, kAXFocusedWindowAttribute), CFEqual(focused, selectedWindow.window),
                   let bounds = frame(selectedWindow.window) else { overlay.hide(); return }
-            visible = rect?.intersection(bounds)
+            if cursor {
+                guard let rect, bounds.contains(CGPoint(x: rect.midX, y: rect.midY)) else { overlay.hide(); return }
+                visible = rect
+            } else { visible = rect?.intersection(bounds) }
         }
         overlay.show(rect: visible, label: label, cursor: cursor, vision: vision)
     }
     private let vision = WindowVision()
-    func watchTargets(_ handler: @escaping (CGRect?) -> Void) { overlay.onTarget = handler }
+    func watchTargets(_ handler: @escaping (CGRect?) -> Void, onAction: @escaping () -> Void) {
+        overlay.onTarget = handler; overlay.onAction = onAction
+    }
+    func pulseTarget() { overlay.pulse() }
     private(set) var confirmationPreview: VisualTargetPreview?
     private var pendingSnapshot: VisualSnapshot?
     private var inspectionRoot: (pid: pid_t, node: AXUIElement)?
     func finish() { overlay.hide(); vision.clear(); pendingSnapshot = nil; confirmationPreview = nil; inspectionRoot = nil }
     private(set) var applications: [DesktopApplication] = []
+    var controllableApplications: [DesktopApplication] { applications.filter { !protectedApps.contains($0.id) } }
     private var applicationURLs: [String: URL] = [:]
     private var references: [String: AXUIElement] = [:]
     private var lastObservation: DesktopObservation?
@@ -304,6 +311,7 @@ final class DesktopController: DesktopTools {
                       CFEqual(focused, windowReference) else { throw failure("The focused document changed. No visual action was taken.") }
             }
             if action.kind == "vision_click" {
+                pulseTarget()
                 // Vision may reveal a target whose AX control was outside the
                 // bounded tree. Prefer its semantic action whenever hit-testing
                 // can identify an enabled control in this exact process.
@@ -369,6 +377,7 @@ final class DesktopController: DesktopTools {
         try Task.checkCancellation()
         try selectedWindow?.validate()
         guard selectedWindow != nil || NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { throw failure("You switched apps before the action. Stopped.") }
+        if ["press", "select", "set_text"].contains(action.kind) { pulseTarget() }
         switch action.kind {
         case "read":
             inspectionRoot = (pid, documentReadRoot(node))

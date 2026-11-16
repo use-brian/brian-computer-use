@@ -69,6 +69,10 @@ struct BrianAvatar: View {
 }
 
 @MainActor final class CompanionMotion: ObservableObject {
+    @Published var cursor = false
+    @Published var flipX = false
+    @Published var flipY = false
+    @Published var pulseAt = Date.distantPast
     @Published var compact = false
     @Published var moving = false
     @Published var direction: CGFloat = 1
@@ -96,6 +100,9 @@ struct CompanionView: View {
             hide: hide, didMove: didMove, readReply: model.hasResponse && !model.isRunning ? readReply : nil, hover: { hovering = $0 })
     }
     var body: some View {
+        if motion.cursor {
+            AgentCursorView(flipX: motion.flipX, flipY: motion.flipY, pulseAt: motion.pulseAt)
+        } else {
         VStack(spacing: 0) {
             if !motion.compact { Text(motion.moving ? "On my way…" : label)
                 .font(.system(size: 10, weight: .medium, design: .rounded))
@@ -110,6 +117,7 @@ struct CompanionView: View {
         }
         .frame(width: motion.compact ? 44 : 96, height: motion.compact ? 44 : 100)
         .overlay { interaction }
+        }
     }
 }
 
@@ -249,7 +257,7 @@ final class CompanionController {
 
     init(model: CommandModel, open: @escaping () -> Void) {
         self.model = model
-        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 96, height: 100),
+        panel = CompanionPanel(contentRect: NSRect(x: 0, y: 0, width: 96, height: 100),
                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.title = "Brian companion"
         panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = false
@@ -277,7 +285,13 @@ final class CompanionController {
             Task { @MainActor in
                 guard let self, self.model.activityTarget == rect, self.model.isRunning else { return }
                 if let rect { self.follow(rect) }
-                else { self.movement?.cancel(); self.movementID = UUID(); self.motion.moving = false }
+                else { self.parkWhileWorking() }
+            }
+        }.store(in: &subscriptions)
+        model.$activityPulse.dropFirst().sink { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.model.isRunning, self.motion.cursor else { return }
+                self.motion.pulseAt = Date()
             }
         }.store(in: &subscriptions)
         model.$isRunning.removeDuplicates().dropFirst().sink { [weak self] running in
@@ -288,6 +302,7 @@ final class CompanionController {
     func show() {
         movement?.cancel(); movementID = UUID(); motion.moving = false
         hiddenByUser = false
+        setCursor(false)
         guard let screen = NSScreen.main?.visibleFrame else { return }
         let saved = UserDefaults.standard.array(forKey: "companionPosition") as? [Double]
         let point = saved?.count == 2 ? CGPoint(x: saved![0], y: saved![1]) : CGPoint(x: screen.maxX-normalSize.width-20, y: screen.minY+50)
@@ -303,6 +318,7 @@ final class CompanionController {
         bar = frame
         guard !hiddenByUser else { return }
         manualUntil = .distantPast
+        setCursor(false)
         let size = model.isRunning ? cursorSize : normalSize
         motion.compact = model.isRunning
         move(to: CompanionPlacement.byBar(frame, size: size, screen: screen(for: frame)))
@@ -317,6 +333,7 @@ final class CompanionController {
     private func returnToSide() {
         guard !hiddenByUser, !interacting else { return }
         motion.compact = false
+        setCursor(false)
         let home = restingFrame ?? panel.frame
         move(to: CompanionPlacement.atSide(home, size: normalSize, screen: screen(for: home)))
     }
@@ -324,9 +341,35 @@ final class CompanionController {
     private func follow(_ target: CGRect) {
         guard model.isRunning, !hiddenByUser, !interacting, Date() >= manualUntil else { return }
         let display = screen(for: target)
-        guard let visible = CompanionPlacement.visibleTarget(target, screen: display) else { return }
+        guard let visible = CompanionPlacement.cursorTarget(target, screen: display) else { return }
+        guard let cursor = CompanionPlacement.cursor(at: CGPoint(x: visible.midX, y: visible.midY), screen: display) else { return }
+        let entering = !motion.cursor
         motion.compact = true
-        move(to: CompanionPlacement.beside(visible, size: cursorSize, screen: display))
+        setCursor(true)
+        motion.flipX = cursor.flipX; motion.flipY = cursor.flipY
+        // First target appears at its true point; later targets glide between points.
+        if entering {
+            movement?.cancel(); movementID = UUID(); motion.moving = false
+            panel.setFrame(cursor.frame, display: true); panel.orderFrontRegardless()
+        } else { move(to: cursor.frame) }
+    }
+
+    private func setCursor(_ enabled: Bool) {
+        motion.cursor = enabled
+        panel.ignoresMouseEvents = enabled
+        panel.level = enabled ? NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 1) : .floating
+        if !enabled { motion.pulseAt = .distantPast }
+    }
+
+    private func parkWhileWorking() {
+        guard motion.cursor, !hiddenByUser, !interacting else { return }
+        movement?.cancel(); movementID = UUID(); motion.moving = false
+        setCursor(false)
+        motion.compact = true
+        let home = restingFrame ?? panel.frame
+        let destination = bar.map { CompanionPlacement.byBar($0, size: cursorSize, screen: screen(for: $0)) }
+            ?? CompanionPlacement.atSide(home, size: cursorSize, screen: screen(for: home))
+        panel.setFrame(destination, display: true)
     }
 
     private func workChanged(_ running: Bool) {
@@ -338,6 +381,7 @@ final class CompanionController {
             if let target = model.activityTarget { follow(target) }
             else { move(to: CGRect(x: panel.frame.midX-cursorSize.width/2, y: panel.frame.midY-cursorSize.height/2, width: cursorSize.width, height: cursorSize.height)) }
         } else {
+            setCursor(false)
             motion.compact = false
             if let bar { runToBar(bar) }
             else { returnToSide() }
@@ -412,4 +456,10 @@ final class CompanionController {
         manualUntil = Date().addingTimeInterval(2)
     }
     private func hide() { hiddenByUser = true; movement?.cancel(); panel.orderOut(nil); reply.hide() }
+}
+
+/// A transparent cursor panel may straddle a display edge. The artwork flips
+/// inwards; AppKit must not relocate its precise action-point anchor.
+private final class CompanionPanel: NSPanel {
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 }
