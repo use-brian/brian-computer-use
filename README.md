@@ -383,3 +383,51 @@ Calculator accepted clicks and keyboard input. Command-A, copy, cut, paste, and
 undo were exercised in the live chat field; the original invoice draft was
 restored. This establishes the sampled Mail workflow, not universal background
 compatibility for every macOS app or every control.
+
+
+### agent-desktop preview (0.8.0)
+
+The command bar's target menu now contains **Use agent-desktop (preview)**.
+Select an app window and enable it before submitting a task. Native control
+remains the startup default; changing backends during a task is disabled.
+
+This is a hybrid, opt-in migration behind `DesktopTools`, not a replacement
+planner. agent-desktop supplies bounded Accessibility snapshots and qualified
+reference actions for supported clicks, row selection, value setting and
+scrolling. Brian still owns the local model, goal verification, confirmations,
+window boundary, and UX. Mail search, permitted app-local keys, and explicit
+vision requests choose the native implementation **before** dispatch. No CLI
+action is retried through native control, even after a safe refusal. Uncertain
+delivery, cancellation, malformed output, and timeout stop the task.
+
+The adapter matches the selected AX window to a unique process/bounds entry,
+then pins the CLI window ID and process instance. Snapshots from another window
+are rejected. It never passes `--headed`. Partial observations remain marked
+partial; large Mail trees can still exhaust the upstream observation budget.
+The first version prioritizes Mail's message pane and keeps native control
+available for unsupported apps and workflows.
+
+The CLI and macOS helper are pinned to the official **v1.3.1 Apple Silicon**
+release. Run `bash scripts/fetch-agent-desktop.sh` before the usual app build to
+fetch the checksum-verified archive. `build-app.sh` embeds the prepared bundle,
+its Apache-2.0 license and provenance; it does not download dependencies itself.
+An absent bundle produces a clear error in preview mode and does not affect
+native mode. The integration uses subprocess argument arrays (no shell), sends
+text values on stdin, caps responses, and imposes a process-group deadline.
+
+Each preview run uses a private temporary `AGENT_DESKTOP_HOME`, without traces
+or screenshot artifacts. Upstream snapshot/ref metadata can contain private
+UI text on disk; Brian removes its run directory on normal completion, error,
+or cancellation. An app crash can leave temporary metadata for OS cleanup.
+No mailbox data or snapshots are included in this repository.
+
+Validation: 71 Swift tests passed, including reference/role mapping, document
+rows remaining read-only, wrong-window rejection, delivery-disposition checks,
+and subprocess stdin/stderr handling. In a live background Mail run, Brian
+searched for an invoice, used the bundled CLI to click a result, read its
+message pane, and returned the subject. An independent fresh content read
+confirmed that subject, and the window inventory reported Mail was not focused.
+Calculator remained usable during the task. This establishes that sampled
+hybrid workflow, not universal headless compatibility or all-native replacement.
+
+Upstream: https://github.com/vercel-labs/agent-desktop/releases/tag/v1.3.1

@@ -41,6 +41,9 @@ cp -R Resources/Licenses "$app_dir/Contents/Resources/"
 cp -R Resources/Brand "$app_dir/Contents/Resources/"
 cp Resources/Brand/Brian.icns "$app_dir/Contents/Resources/Brian.icns"
 cp Resources/ModelInfo.json "$app_dir/Contents/Resources/"
+if [ -d "$PWD/dist/agent-desktop" ]; then
+  cp -R "$PWD/dist/agent-desktop" "$app_dir/Contents/Resources/agent-desktop"
+fi
 if [ "$shell_only" = false ]; then
   # Preserve the PyInstaller layout and frameworks; clone weights on APFS.
   # The supplied research helper targets macOS 27.2; its MLX wheel targets 26.2.

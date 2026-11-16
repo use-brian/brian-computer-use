@@ -16,6 +16,8 @@ struct CommandView: View {
                         animated: model.isRunning)
                 .frame(width: 28, height: 28)
             Menu {
+                Toggle("Use agent-desktop (preview)", isOn: $model.useAgentDesktop)
+                Divider()
                 Button("Mac — across apps") { model.selectedWindowID = nil }
                 ForEach(model.windows) { window in
                     Button("\(window.name) — \(window.title.isEmpty ? "Untitled window" : window.title)") { model.selectedWindowID = window.id }
@@ -24,7 +26,7 @@ struct CommandView: View {
                 Text(model.targetLabel).font(.system(size: 11, weight: .medium)).lineLimit(1).frame(maxWidth: 80)
             }
             .menuStyle(.borderlessButton).fixedSize().disabled(model.isRunning)
-            .help(model.selectedWindow.map { "Only this window: " + $0.title + ". You can use other apps while Brian works." } ?? "Choose a window to work in the background")
+            .help(model.selectedWindow.map { (model.useAgentDesktop ? "agent-desktop preview. " : "") + "Only this window: " + $0.title + ". You can use other apps while Brian works." } ?? "Choose a window to work in the background")
             .accessibilityLabel("Work in")
             if model.isRunning {
                 Text(model.pendingConfirmation == nil ? model.status : "Waiting for your confirmation…")

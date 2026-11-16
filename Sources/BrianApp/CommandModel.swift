@@ -4,6 +4,7 @@ import BrianCore
 
 @MainActor
 final class CommandModel: ObservableObject {
+    @Published var useAgentDesktop = false
     @Published var windows: [SelectedWindow] = []
     @Published var selectedWindowID: UUID?
     var selectedWindow: SelectedWindow? { windows.first { $0.id == selectedWindowID } }
@@ -46,11 +47,17 @@ final class CommandModel: ObservableObject {
         hasError = false; isFinished = false; hasResponse = false; needsAccessibility = false; needsScreenRecording = false
         isRunning = true
         task = Task { [self] in
-            defer { desktop.finish(); isRunning = false; task = nil }
+            var external: AgentDesktopController?
+            defer { external?.finish(); desktop.finish(); isRunning = false; task = nil }
             do {
                 let window = selectedWindow
                 desktop.bind(window)
-                let result = try await NaturalAgent(planner: runtime, tools: desktop).run(
+                if useAgentDesktop {
+                    guard let window else { throw AgentError.runtime("Select an app window before using the agent-desktop preview.") }
+                    external = try AgentDesktopController(native: desktop, window: window)
+                }
+                let tools: any DesktopTools = external ?? desktop
+                let result = try await NaturalAgent(planner: runtime, tools: tools).run(
                     task: text, app: window?.app ?? foregroundApp, conversation: conversation, scope: window?.scope,
                     approve: { [weak self] reason in await self?.requestApproval(reason) ?? false },
                     onEvent: { [weak self] message in self?.status = message })
